@@ -87,8 +87,9 @@ impl Bus {
             let ack_start = self.now();
             let address = frame.bytes[0] & 0x0f;
             let ack = address != 15 && transport::should_ack(address);
-            while self.now().wrapping_sub(ack_start) < 600 {}
             if ack {
+                // Extend the initiator's ACK low pulse immediately. Its own
+                // low pulse may end at 400 us; waiting creates another edge.
                 self.low();
             }
             while self.now().wrapping_sub(ack_start) < 1500 {}

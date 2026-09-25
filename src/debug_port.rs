@@ -1,4 +1,4 @@
-//! Periodic, machine-readable diagnostics on a second USB CDC ACM interface.
+//! Stable physical-address status and on-request diagnostics on CDC interface 2.
 
 use core::fmt::Write as _;
 
@@ -16,6 +16,10 @@ pub struct DebugOutput {
     sent: usize,
     last_at: u64,
     connected: bool,
+    reported_address: Option<u16>,
+    diagnostics_requested: bool,
+    command: [u8; 16],
+    command_len: usize,
 }
 
 impl DebugOutput {
@@ -25,6 +29,28 @@ impl DebugOutput {
             sent: 0,
             last_at: 0,
             connected: false,
+            reported_address: None,
+            diagnostics_requested: false,
+            command: [0; 16],
+            command_len: 0,
+        }
+    }
+
+    pub fn input_byte(&mut self, byte: u8) {
+        if byte == b'\n' {
+            if &self.command[..self.command_len] == b"diagnostics" {
+                self.diagnostics_requested = true;
+            }
+            self.command_len = 0;
+        } else if byte != b'\r' {
+            if self.command_len < self.command.len() {
+                self.command[self.command_len] = byte;
+                self.command_len += 1;
+            } else {
+                // An oversized command cannot become valid by appending bytes.
+                self.command_len = self.command.len();
+                self.command.fill(0);
+            }
         }
     }
 
@@ -33,6 +59,9 @@ impl DebugOutput {
             self.connected = false;
             self.line.clear();
             self.sent = 0;
+            self.reported_address = None;
+            self.command_len = 0;
+            self.diagnostics_requested = false;
             return;
         }
 
@@ -41,10 +70,19 @@ impl DebugOutput {
             self.connected = true;
         }
 
-        if self.line.is_empty() && (just_connected || now - self.last_at >= PERIOD_US) {
+        let address = ddc.physical_address();
+        if self.line.is_empty() && self.diagnostics_requested {
+            self.diagnostics_requested = false;
+            self.line = format_snapshot(now / 1_000, address, &ddc.diagnostic_bytes());
+            self.sent = 0;
+        } else if self.line.is_empty()
+            && (just_connected
+                || self.reported_address != Some(address)
+                || now.wrapping_sub(self.last_at) >= PERIOD_US)
+        {
             self.last_at = now;
-            self.line =
-                format_snapshot(now / 1_000, ddc.physical_address(), &ddc.diagnostic_bytes());
+            self.reported_address = Some(address);
+            self.line = format_status(address);
             self.sent = 0;
         }
 
@@ -60,6 +98,12 @@ impl DebugOutput {
             }
         }
     }
+}
+
+fn format_status(address: u16) -> String<LINE_CAPACITY> {
+    let mut line = String::new();
+    write!(line, "status_version=1\tphysical_address={}\n", address).unwrap();
+    line
 }
 
 fn word(bytes: &[u8], offset: usize) -> u32 {

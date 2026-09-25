@@ -33,6 +33,8 @@ enum Code {
     Config22 = 0x22,
     Config24 = 0x24,
     Config26 = 0x26,
+    // CECLink extension. Query the raw DDC result without a host override.
+    GetSniffedPhysicalAddress = 0x30,
 }
 
 pub struct Protocol {
@@ -200,6 +202,9 @@ impl Protocol {
             Code::GetPhysicalAddress => {
                 let address = self.host_address.unwrap_or(self.sniffed_address);
                 self.word_reply(Code::GetPhysicalAddress, address);
+            }
+            Code::GetSniffedPhysicalAddress if args.is_empty() => {
+                self.word_reply(code, self.sniffed_address);
             }
             _ => self.rejected(),
         }

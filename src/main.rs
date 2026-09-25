@@ -99,7 +99,8 @@ fn main() -> ! {
     ));
     let mut serial =
         SerialPort::new_with_interface_names(&usb_bus, Some("Pulse-Eight CEC control"), None);
-    let mut debug_serial = SerialPort::new_with_interface_names(&usb_bus, Some("DDC debug"), None);
+    let mut debug_serial =
+        SerialPort::new_with_interface_names(&usb_bus, Some("CECLink status"), None);
     let mut usb_reset = usb_reset::UsbReset::new(&usb_bus);
     let mut serial_number_buffer = [0u8; 16];
     let mut strings = StringDescriptors::default()
@@ -133,6 +134,12 @@ fn main() -> ! {
             protocol.event(event);
         }
         protocol.set_physical_address(ddc.physical_address());
+        let mut debug_bytes = [0u8; 32];
+        if let Ok(count) = debug_serial.read(&mut debug_bytes) {
+            for &byte in &debug_bytes[..count] {
+                debug_output.input_byte(byte);
+            }
+        }
         debug_output.poll(&mut debug_serial, usb_timer.get_counter().ticks(), &ddc);
         if usb_reset.take_bootsel_request() {
             usb_bootsel_requested_at = Some(usb_timer.get_counter_low());
