@@ -18,6 +18,7 @@ mod ddc_protocol;
 mod pulse8;
 mod status_led;
 mod transport;
+mod usb_reset;
 
 #[unsafe(link_section = ".start_block")]
 #[used]
@@ -81,6 +82,7 @@ fn main() -> ! {
     }
 
     let mut multicore = Multicore::new(&mut pac.PSM, &mut pac.PPB, &mut sio.fifo);
+    let usb_timer = timer;
     multicore.cores()[1]
         .spawn(CORE1_STACK.take().unwrap(), move || {
             cec::run(cec_pin, timer)
@@ -95,6 +97,7 @@ fn main() -> ! {
         &mut pac.RESETS,
     ));
     let mut serial = SerialPort::new(&usb_bus);
+    let mut usb_reset = usb_reset::UsbReset::new(&usb_bus);
     let mut serial_number_buffer = [0u8; 16];
     let mut strings = StringDescriptors::default()
         .manufacturer("CEC 4K")
@@ -105,15 +108,17 @@ fn main() -> ! {
     let mut device = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x2548, 0x1002))
         .strings(&[strings])
         .unwrap()
-        .device_class(2)
+        .composite_with_iads()
+        .device_release(0x0010) // USB BCD version shown by fwupd.
         .build();
 
     let mut protocol = pulse8::Protocol::new();
     let mut pending_output = None;
+    let mut usb_bootsel_requested_at = None;
     loop {
         ddc.poll();
         led.update(ddc.led_state());
-        let _ = device.poll(&mut [&mut serial]);
+        let _ = device.poll(&mut [&mut serial, &mut usb_reset]);
         let mut bytes = [0u8; 64];
         if let Ok(count) = serial.read(&mut bytes) {
             for &byte in &bytes[..count] {
@@ -127,7 +132,12 @@ fn main() -> ! {
         if protocol.take_diagnostic_request() {
             protocol.reply_diagnostics(&ddc.diagnostic_bytes());
         }
-        if protocol.take_bootsel_request() {
+        if usb_reset.take_bootsel_request() {
+            usb_bootsel_requested_at = Some(usb_timer.get_counter_low());
+        }
+        let usb_bootsel_ready = usb_bootsel_requested_at
+            .is_some_and(|at| usb_timer.get_counter_low().wrapping_sub(at) >= 50_000);
+        if protocol.take_bootsel_request() || usb_bootsel_ready {
             hal::reboot::reboot(
                 hal::reboot::RebootKind::BootSel {
                     picoboot_disabled: false,

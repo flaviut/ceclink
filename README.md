@@ -33,6 +33,14 @@ If you used `nix build .#firmware`, flash `result/cec-4k.uf2` instead.
 
 After flashing a firmware with the diagnostic command, `python3 tools/ddc_diag.py --bootsel` enters BOOTSEL over the USB serial connection for the next update. The normal USB connection does not provide JTAG or SWD.
 
+## fwupd on NixOS
+
+The firmware exposes Raspberry Pi's USB reset interface alongside CDC ACM. fwupd's existing `rp-pico` plugin uses that interface to enter RP2350 BOOTSEL, then its `uf2` plugin writes the UF2 image. The overlay adds device matching for this adapter and the RP2350 ROM's `2e8a:000f` USB identity.
+
+In a NixOS flake, include this repository as an input and add `inputs.cec-4k.nixosModules.fwupd` to the host's module list. Alternatively, add `inputs.cec-4k.overlays.default` to `nixpkgs.overlays` and enable `services.fwupd.enable = true;`. Rebuild the NixOS configuration, then flash a firmware containing the USB reset interface once using the manual method above. `fwupdmgr get-devices` should then show the adapter as updatable. A signed or local fwupd CAB containing the UF2 and release metadata is still required for `fwupdmgr update` to offer an update.
+
+The runtime quirk selects fwupd's `rp-pico` plugin by VID:PID; that plugin also checks for the USB reset interface, which ordinary Pulse-Eight adapters lack. Increment the firmware's USB `device_release` for future firmware versions so fwupd can report the installed version. The RP2350 ROM BOOTSEL button remains a recovery path.
+
 ## DDC diagnostics
 
 Run `python3 tools/ddc_diag.py` for a snapshot or add `--watch` while reading the monitor's EDID. It reports live SDA/SCL levels, PIO START/STOP and byte counts, FIFO stalls, ring overflows, EDID decoder counts, and the first two raw words after the latest START. This command uses firmware-specific serial code `0x40` and does not require the Linux CEC driver.

@@ -27,13 +27,30 @@
           f (
             import nixpkgs {
               inherit system;
-              overlays = [ rust-overlay.overlays.default ];
+              overlays = [
+                rust-overlay.overlays.default
+                self.overlays.default
+              ];
             }
           )
         );
       target = "thumbv8m.main-none-eabihf";
     in
     {
+      overlays.default = final: prev: {
+        fwupd = prev.fwupd.overrideAttrs (old: {
+          postInstall = (old.postInstall or "") + ''
+            install -Dm644 ${./nix/cec-4k.quirk} \
+              "$out/share/fwupd/quirks.d/cec-4k.quirk"
+          '';
+        });
+      };
+
+      nixosModules.fwupd = { ... }: {
+        nixpkgs.overlays = [ self.overlays.default ];
+        services.fwupd.enable = true;
+      };
+
       formatter = forSystems (
         pkgs:
         pkgs.writeShellApplication {
@@ -105,6 +122,7 @@
         {
           default = firmware;
           firmware = firmware;
+          fwupd = pkgs.fwupd;
         }
       );
     };

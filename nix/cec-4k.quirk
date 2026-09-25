@@ -1,0 +1,10 @@
+# The rp-pico plugin also requires the USB reset interface; ordinary
+# Pulse-Eight adapters with this VID:PID do not expose it.
+[USB\VID_2548&PID_1002]
+Plugin = rp_pico
+CounterpartGuid = USB\VID_2E8A&PID_000F
+
+# The RP2350 ROM uses a different PID from the RP2040 entry in fwupd.
+[USB\VID_2E8A&PID_000F]
+Guid = UF2\FAMILY_E48BFF59
+Flags = updatable
