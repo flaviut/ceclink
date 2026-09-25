@@ -35,7 +35,7 @@ The normal USB connection does not provide JTAG or SWD. The USB reset interface 
 
 ## NixOS integration
 
-Add this repository as a flake input and import `inputs.ceclink.nixosModules.default` on the host. The module loads the Pulse-Eight kernel driver, starts `inputattach` only for the CEC USB interface, creates `/dev/ceclink-debug` for the diagnostics interface, and enables fwupd support. Members of the `video` group can read the diagnostics port.
+Add this repository as a flake input and import `inputs.ceclink.nixosModules.default` on the host. The module loads the Pulse-Eight kernel driver, starts `inputattach` only for the CEC USB interface, creates `/dev/ceclink-debug` for the diagnostics interface, installs `v4l-utils` (including `cec-ctl`), and enables fwupd support. Members of the `video` group can read the diagnostics port.
 
 ## fwupd on NixOS
 

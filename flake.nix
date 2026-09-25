@@ -49,6 +49,7 @@
 
       nixosModules.default = { pkgs, config, ... }: {
         nixpkgs.overlays = [ self.overlays.default ];
+        environment.systemPackages = [ pkgs.v4l-utils ];
         services.fwupd.enable = true;
         boot.kernelModules = [ "pulse8-cec" ];
         boot.extraModulePackages = [
