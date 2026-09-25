@@ -2,6 +2,7 @@
 #![no_main]
 
 use hal::{
+    clocks::Clock,
     gpio::Pins,
     multicore::{Multicore, Stack},
     sio::Sio,
@@ -15,6 +16,7 @@ mod cec;
 mod ddc;
 mod ddc_protocol;
 mod pulse8;
+mod status_led;
 mod transport;
 
 #[unsafe(link_section = ".start_block")]
@@ -64,6 +66,15 @@ fn main() -> ! {
     let cec_pin = pins.gpio4.into_floating_input(); // XIAO D9
     let sda = pins.gpio6.into_floating_input(); // XIAO D4
     let scl = pins.gpio7.into_floating_input(); // XIAO D5
+    let rgb_data = pins.gpio22.into_floating_input();
+    let rgb_power = pins.gpio23.into_floating_input();
+    let mut led = status_led::StatusLed::new(
+        rgb_data,
+        rgb_power,
+        pac.PIO1,
+        &mut pac.RESETS,
+        clocks.system_clock.freq().to_Hz(),
+    );
     let mut ddc = ddc::init(sda, scl, pac.PIO0, &mut pac.RESETS);
     unsafe {
         hal::arch::interrupt_enable();
@@ -101,6 +112,7 @@ fn main() -> ! {
     let mut pending_output = None;
     loop {
         ddc.poll();
+        led.update(ddc.led_state());
         let _ = device.poll(&mut [&mut serial]);
         let mut bytes = [0u8; 64];
         if let Ok(count) = serial.read(&mut bytes) {
@@ -112,6 +124,18 @@ fn main() -> ! {
             protocol.event(event);
         }
         protocol.set_physical_address(ddc.physical_address());
+        if protocol.take_diagnostic_request() {
+            protocol.reply_diagnostics(&ddc.diagnostic_bytes());
+        }
+        if protocol.take_bootsel_request() {
+            hal::reboot::reboot(
+                hal::reboot::RebootKind::BootSel {
+                    picoboot_disabled: false,
+                    msd_disabled: false,
+                },
+                hal::reboot::RebootArch::Arm,
+            );
+        }
         if pending_output.is_none() {
             pending_output = protocol.next_output();
         }

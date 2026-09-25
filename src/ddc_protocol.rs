@@ -7,6 +7,15 @@ pub const GAP: u32 = 1;
 pub const START: u32 = 2;
 pub const STOP: u32 = 3;
 
+#[derive(Clone, Copy, Default)]
+pub struct DecoderStats {
+    pub edid_write_addresses: u32,
+    pub edid_read_addresses: u32,
+    pub edid_bytes: u32,
+    pub invalid_words: u32,
+    pub unacknowledged_addresses: u32,
+}
+
 pub struct Decoder {
     active: bool,
     byte_index: u16,
@@ -17,6 +26,7 @@ pub struct Decoder {
     edid: [u8; 256],
     seen: [u8; 32],
     physical_address: u16,
+    stats: DecoderStats,
 }
 
 impl Decoder {
@@ -31,6 +41,13 @@ impl Decoder {
             edid: [0; 256],
             seen: [0; 32],
             physical_address: 0xffff,
+            stats: DecoderStats {
+                edid_write_addresses: 0,
+                edid_read_addresses: 0,
+                edid_bytes: 0,
+                invalid_words: 0,
+                unacknowledged_addresses: 0,
+            },
         }
     }
 
@@ -38,9 +55,17 @@ impl Decoder {
         self.physical_address
     }
 
+    pub fn stats(&self) -> DecoderStats {
+        self.stats
+    }
+
     pub fn push(&mut self, word: u32) {
         match word {
-            GAP => *self = Self::new(),
+            GAP => {
+                let stats = self.stats;
+                *self = Self::new();
+                self.stats = stats;
+            }
             START => {
                 self.active = true;
                 self.byte_index = 0;
@@ -49,6 +74,10 @@ impl Decoder {
             _ if self.active && word & 0x7f_ffff == 0 => {
                 let nine_bits = (word.reverse_bits() & 0x1ff) as u16;
                 self.byte((nine_bits >> 1) as u8, nine_bits & 1 == 0);
+            }
+            _ if self.active => {
+                self.stats.invalid_words = self.stats.invalid_words.wrapping_add(1);
+                self.active = false;
             }
             _ => {}
         }
@@ -59,6 +88,17 @@ impl Decoder {
             self.target = value >> 1;
             self.reading = value & 1 != 0;
             self.active = ack;
+            if !ack {
+                self.stats.unacknowledged_addresses =
+                    self.stats.unacknowledged_addresses.wrapping_add(1);
+            } else if self.target == 0x50 {
+                let counter = if self.reading {
+                    &mut self.stats.edid_read_addresses
+                } else {
+                    &mut self.stats.edid_write_addresses
+                };
+                *counter = counter.wrapping_add(1);
+            }
         } else if self.active && self.target == 0x50 {
             if self.reading {
                 let index = u16::from(self.segment) * 256 + u16::from(self.offset);
@@ -89,6 +129,7 @@ impl Decoder {
     fn record(&mut self, index: usize, value: u8) {
         self.edid[index] = value;
         self.seen[index / 8] |= 1 << (index % 8);
+        self.stats.edid_bytes = self.stats.edid_bytes.wrapping_add(1);
         self.find_physical_address();
     }
 

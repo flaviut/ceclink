@@ -38,8 +38,10 @@ fn repeated_start_and_read_nack_preserve_physical_address() {
 fn a_gap_or_new_extension_read_discards_old_bytes() {
     let mut decoder = Decoder::new();
     read_cta_address(&mut decoder);
+    assert_eq!(decoder.stats().edid_bytes, 10);
     decoder.push(GAP);
     assert_eq!(decoder.physical_address(), 0xffff);
+    assert_eq!(decoder.stats().edid_bytes, 10);
 
     read_cta_address(&mut decoder);
     assert_eq!(decoder.physical_address(), 0x1234);

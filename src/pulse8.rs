@@ -33,6 +33,8 @@ enum Code {
     Config22 = 0x22,
     Config24 = 0x24,
     Config26 = 0x26,
+    GetDdcDiagnostics = 0x40,
+    EnterBootsel = 0x41,
 }
 
 pub struct Protocol {
@@ -44,6 +46,8 @@ pub struct Protocol {
     transmit: Frame,
     sniffed_address: u16,
     host_address: Option<u16>,
+    diagnostic_requested: bool,
+    bootsel_requested: bool,
 }
 
 impl Protocol {
@@ -57,6 +61,8 @@ impl Protocol {
             transmit: Frame::default(),
             sniffed_address: 0xffff,
             host_address: None,
+            diagnostic_requested: false,
+            bootsel_requested: false,
         }
     }
 
@@ -66,6 +72,24 @@ impl Protocol {
 
     pub fn next_output(&mut self) -> Option<u8> {
         self.output.pop_front()
+    }
+
+    pub fn take_diagnostic_request(&mut self) -> bool {
+        core::mem::take(&mut self.diagnostic_requested)
+    }
+
+    pub fn reply_diagnostics(&mut self, data: &[u8]) {
+        if data.len() > 63 {
+            return;
+        }
+        let mut payload = [0; 64];
+        payload[0] = Code::GetDdcDiagnostics.into();
+        payload[1..data.len() + 1].copy_from_slice(data);
+        self.packet(&payload[..data.len() + 1]);
+    }
+
+    pub fn take_bootsel_request(&mut self) -> bool {
+        core::mem::take(&mut self.bootsel_requested)
     }
 
     fn packet(&mut self, payload: &[u8]) {
@@ -201,6 +225,8 @@ impl Protocol {
                 let address = self.host_address.unwrap_or(self.sniffed_address);
                 self.word_reply(Code::GetPhysicalAddress, address);
             }
+            Code::GetDdcDiagnostics => self.diagnostic_requested = true,
+            Code::EnterBootsel if args == b"RP25" => self.bootsel_requested = true,
             _ => self.rejected(),
         }
     }

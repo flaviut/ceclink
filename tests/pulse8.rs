@@ -85,3 +85,23 @@ fn received_frame_keeps_eom_and_escape_bytes() {
         [0xff, 0x05, 0xfd, 0xfc, 0xfe, 0xff, 0x86, 0xfd, 0xfb, 0xfe]
     );
 }
+
+#[test]
+fn diagnostics_and_bootsel_require_explicit_commands() {
+    let mut protocol = pulse8::Protocol::new();
+    input(&mut protocol, &[0xff, 0x40, 0xfe]);
+    assert!(protocol.take_diagnostic_request());
+    assert!(!protocol.take_diagnostic_request());
+    protocol.reply_diagnostics(&[0xfd, 0xfe, 0xff]);
+    assert_eq!(
+        output(&mut protocol),
+        [0xff, 0x40, 0xfd, 0xfa, 0xfd, 0xfb, 0xfd, 0xfc, 0xfe]
+    );
+
+    input(&mut protocol, &[0xff, 0x41, 0x52, 0x50, 0xfe]);
+    assert!(!protocol.take_bootsel_request());
+    assert_eq!(output(&mut protocol), [0xff, 0x09, 0xfe]);
+    input(&mut protocol, &[0xff, 0x41, b'R', b'P', b'2', b'5', 0xfe]);
+    assert!(protocol.take_bootsel_request());
+    assert!(!protocol.take_bootsel_request());
+}

@@ -16,7 +16,7 @@ use hal::{
 use heapless::Deque;
 use rp235x_hal as hal;
 
-use crate::ddc_protocol::{Decoder, GAP};
+use crate::ddc_protocol::{Decoder, GAP, START, STOP};
 
 type Sda = Pin<Gpio6, FunctionSioInput, PullNone>;
 type Scl = Pin<Gpio7, FunctionSioInput, PullNone>;
@@ -25,23 +25,60 @@ type PioScl = Pin<Gpio7, FunctionPio0, PullNone>;
 type DdcRx = Rx<(PIO0, SM0)>;
 
 const RING_WORDS: usize = 512;
+pub const DIAGNOSTIC_LEN: usize = 57;
+
+#[derive(Clone, Copy, Default)]
+struct CaptureStats {
+    starts: u32,
+    stops: u32,
+    words: u32,
+    fifo_stalls: u32,
+    ring_overflows: u32,
+    ring_peak: u16,
+    trace_len: u8,
+    trace: [u32; 2],
+}
 
 struct Capture {
     rx: DdcRx,
     ring: Deque<u32, RING_WORDS>,
+    stats: CaptureStats,
 }
 
 impl Capture {
     fn enqueue(&mut self, word: u32) {
+        match word {
+            START => {
+                self.stats.starts = self.stats.starts.wrapping_add(1);
+                self.stats.trace_len = 0;
+            }
+            STOP => self.stats.stops = self.stats.stops.wrapping_add(1),
+            GAP => {}
+            _ => {
+                self.stats.words = self.stats.words.wrapping_add(1);
+                if self.stats.trace_len < 2 {
+                    self.stats.trace[self.stats.trace_len as usize] = word;
+                    self.stats.trace_len += 1;
+                }
+            }
+        }
         if self.ring.push_back(word).is_err() {
+            self.stats.ring_overflows = self.stats.ring_overflows.wrapping_add(1);
             self.ring.clear();
             // The decoder must wait for a new START after any lost word.
             let _ = self.ring.push_back(GAP);
         }
+        self.stats.ring_peak = self.stats.ring_peak.max(self.ring.len() as u16);
     }
 }
 
 static CAPTURE: Mutex<RefCell<Option<Capture>>> = Mutex::new(RefCell::new(None));
+
+pub struct LedState {
+    pub address_known: bool,
+    pub saw_start: bool,
+    pub capture_error: bool,
+}
 
 pub struct Ddc {
     decoder: Decoder,
@@ -68,6 +105,67 @@ impl Ddc {
 
     pub fn physical_address(&self) -> u16 {
         self.decoder.physical_address()
+    }
+
+    pub fn led_state(&self) -> LedState {
+        let stats = critical_section::with(|cs| CAPTURE.borrow_ref(cs).as_ref().unwrap().stats);
+        LedState {
+            address_known: self.physical_address() != 0xffff,
+            saw_start: stats.starts != 0,
+            capture_error: stats.fifo_stalls != 0 || stats.ring_overflows != 0,
+        }
+    }
+
+    pub fn diagnostic_bytes(&self) -> [u8; DIAGNOSTIC_LEN] {
+        let (capture, ring_used) = critical_section::with(|cs| {
+            let borrow = CAPTURE.borrow_ref(cs);
+            let capture = borrow.as_ref().unwrap();
+            (capture.stats, capture.ring.len() as u16)
+        });
+        // SIO GPIO_IN observes the pads even while PIO owns their function.
+        let pins = unsafe { &*pac::SIO::ptr() }.gpio_in().read().bits();
+        let levels = ((pins >> 6) & 3) as u8;
+        let decoder = self.decoder.stats();
+        let mut bytes = [0; DIAGNOSTIC_LEN];
+        bytes[0] = 1; // diagnostic format version
+        bytes[1] = levels; // bit 0: SDA, bit 1: SCL
+        bytes[2..4].copy_from_slice(&ring_used.to_be_bytes());
+        bytes[4..6].copy_from_slice(&capture.ring_peak.to_be_bytes());
+        for (slot, value) in [
+            capture.starts,
+            capture.stops,
+            capture.words,
+            capture.fifo_stalls,
+            capture.ring_overflows,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let offset = 6 + slot * 4;
+            bytes[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+        }
+        bytes[26] = capture.trace_len;
+        bytes[27..31].copy_from_slice(&capture.trace[0].to_be_bytes());
+        bytes[31..35].copy_from_slice(&capture.trace[1].to_be_bytes());
+        for (slot, value) in [
+            decoder.edid_write_addresses,
+            decoder.edid_read_addresses,
+            decoder.edid_bytes,
+            decoder.invalid_words,
+            decoder.unacknowledged_addresses,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let offset = 35 + slot * 4;
+            bytes[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+        }
+        let pio = unsafe { &*PIO0::ptr() };
+        bytes[55] = pio.sm(0).sm_addr().read().bits() as u8;
+        let fifo = pio.fstat().read();
+        bytes[56] = u8::from(fifo.rxempty().bits() & 1 != 0)
+            | (u8::from(fifo.rxfull().bits() & 1 != 0) << 1);
+        bytes
     }
 }
 
@@ -129,6 +227,7 @@ pub fn init(sda: Sda, scl: Scl, pio0: PIO0, resets: &mut pac::RESETS) -> Ddc {
         CAPTURE.borrow_ref_mut(cs).replace(Capture {
             rx,
             ring: Deque::new(),
+            stats: CaptureStats::default(),
         });
     });
     unsafe { hal::arch::interrupt_unmask(pac::Interrupt::PIO0_IRQ_0) };
@@ -160,6 +259,7 @@ fn PIO0_IRQ_0() {
         let pio = unsafe { &*PIO0::ptr() };
         if pio.fdebug().read().rxstall().bits() & 1 != 0 {
             pio.fdebug().write(|w| unsafe { w.rxstall().bits(1) });
+            capture.stats.fifo_stalls = capture.stats.fifo_stalls.wrapping_add(1);
             capture.ring.clear();
             capture.enqueue(GAP);
         }
