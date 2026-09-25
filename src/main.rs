@@ -13,6 +13,7 @@ use usbd_serial::SerialPort;
 
 mod cec;
 mod ddc;
+mod ddc_protocol;
 mod pulse8;
 mod transport;
 
@@ -63,7 +64,7 @@ fn main() -> ! {
     let cec_pin = pins.gpio4.into_floating_input(); // XIAO D9
     let sda = pins.gpio6.into_floating_input(); // XIAO D4
     let scl = pins.gpio7.into_floating_input(); // XIAO D5
-    ddc::init(sda, scl);
+    let mut ddc = ddc::init(sda, scl, pac.PIO0, &mut pac.RESETS);
     unsafe {
         hal::arch::interrupt_enable();
     }
@@ -99,6 +100,7 @@ fn main() -> ! {
     let mut protocol = pulse8::Protocol::new();
     let mut pending_output = None;
     loop {
+        ddc.poll();
         let _ = device.poll(&mut [&mut serial]);
         let mut bytes = [0u8; 64];
         if let Ok(count) = serial.read(&mut bytes) {
@@ -109,7 +111,7 @@ fn main() -> ! {
         while let Some(event) = transport::pop_event() {
             protocol.event(event);
         }
-        protocol.set_physical_address(ddc::physical_address());
+        protocol.set_physical_address(ddc.physical_address());
         if pending_output.is_none() {
             pending_output = protocol.next_output();
         }

@@ -1,176 +1,167 @@
-//! Receive-only HDMI DDC observer on XIAO D4/D5 (GPIO6/GPIO7).
-//! It never enables an output driver on either pin.
-use core::{
-    cell::RefCell,
-    sync::atomic::{AtomicU16, Ordering},
-};
+//! Passive HDMI DDC capture on XIAO D4/D5 (GPIO6/GPIO7).
+//! PIO observes both input pins and pushes START, STOP, and nine-bit words.
+//! The IRQ only moves FIFO words into SRAM; protocol parsing runs in `poll`.
+
+use core::cell::RefCell;
+
 use critical_section::Mutex;
-use embedded_hal::digital::InputPin;
-use hal::gpio::{
-    self,
-    bank0::{Gpio6, Gpio7},
-    FunctionSioInput, Pin, PullNone,
+use hal::{
+    gpio::{
+        bank0::{Gpio6, Gpio7},
+        FunctionPio0, FunctionSioInput, Pin, PullNone,
+    },
+    pac::{self, PIO0},
+    pio::{Buffers, PIOBuilder, PIOExt, PinDir, PioIRQ, Running, Rx, StateMachine, SM0},
 };
+use heapless::Deque;
 use rp235x_hal as hal;
+
+use crate::ddc_protocol::{Decoder, GAP};
 
 type Sda = Pin<Gpio6, FunctionSioInput, PullNone>;
 type Scl = Pin<Gpio7, FunctionSioInput, PullNone>;
+type PioSda = Pin<Gpio6, FunctionPio0, PullNone>;
+type PioScl = Pin<Gpio7, FunctionPio0, PullNone>;
+type DdcRx = Rx<(PIO0, SM0)>;
 
-static STATE: Mutex<RefCell<Option<Sniffer>>> = Mutex::new(RefCell::new(None));
-static PHYSICAL_ADDRESS: AtomicU16 = AtomicU16::new(0xffff);
+const RING_WORDS: usize = 512;
 
-pub fn physical_address() -> u16 {
-    PHYSICAL_ADDRESS.load(Ordering::Relaxed)
+struct Capture {
+    rx: DdcRx,
+    ring: Deque<u32, RING_WORDS>,
 }
 
-pub fn init(sda: Sda, scl: Scl) {
-    sda.set_interrupt_enabled(gpio::Interrupt::EdgeLow, true);
-    sda.set_interrupt_enabled(gpio::Interrupt::EdgeHigh, true);
-    scl.set_interrupt_enabled(gpio::Interrupt::EdgeHigh, true);
-    critical_section::with(|cs| STATE.borrow_ref_mut(cs).replace(Sniffer::new(sda, scl)));
-    unsafe {
-        hal::arch::interrupt_unmask(hal::pac::Interrupt::IO_IRQ_BANK0);
+impl Capture {
+    fn enqueue(&mut self, word: u32) {
+        if self.ring.push_back(word).is_err() {
+            self.ring.clear();
+            // The decoder must wait for a new START after any lost word.
+            let _ = self.ring.push_back(GAP);
+        }
     }
 }
 
-struct Sniffer {
-    sda: Sda,
-    scl: Scl,
-    active: bool,
-    bits: u8,
-    byte: u8,
-    byte_index: u16,
-    target: u8,
-    reading: bool,
-    offset: u8,
-    segment: u8,
-    edid: [u8; 256],
-    seen: [u8; 32],
+static CAPTURE: Mutex<RefCell<Option<Capture>>> = Mutex::new(RefCell::new(None));
+
+pub struct Ddc {
+    decoder: Decoder,
+    _sda: PioSda,
+    _scl: PioScl,
+    _sm: StateMachine<(PIO0, SM0), Running>,
+    _pio: hal::pio::PIO<PIO0>,
 }
 
-impl Sniffer {
-    fn new(sda: Sda, scl: Scl) -> Self {
-        Self {
-            sda,
-            scl,
-            active: false,
-            bits: 0,
-            byte: 0,
-            byte_index: 0,
-            target: 0,
-            reading: false,
-            offset: 0,
-            segment: 0,
-            edid: [0; 256],
-            seen: [0; 32],
+impl Ddc {
+    pub fn poll(&mut self) {
+        // The IRQ keeps filling the ring while foreground work and USB run.
+        for _ in 0..64 {
+            let word = critical_section::with(|cs| {
+                CAPTURE
+                    .borrow_ref_mut(cs)
+                    .as_mut()
+                    .and_then(|capture| capture.ring.pop_front())
+            });
+            let Some(word) = word else { break };
+            self.decoder.push(word);
         }
     }
 
-    fn start(&mut self) {
-        self.active = true;
-        self.bits = 0;
-        self.byte = 0;
-        self.byte_index = 0;
+    pub fn physical_address(&self) -> u16 {
+        self.decoder.physical_address()
     }
+}
 
-    fn rising_clock(&mut self) {
-        if !self.active {
-            return;
-        }
-        if self.bits == 8 {
-            self.bits = 0; // ninth clock is ACK/NACK
-            self.byte = 0;
-            return;
-        }
-        self.byte = (self.byte << 1) | u8::from(self.sda.is_high().unwrap_or(false));
-        self.bits += 1;
-        if self.bits == 8 {
-            let value = self.byte;
-            if self.byte_index == 0 {
-                self.target = value >> 1;
-                self.reading = value & 1 != 0;
-            } else if self.target == 0x50 {
-                if self.reading {
-                    let index = (u16::from(self.segment) * 256 + u16::from(self.offset)) as usize;
-                    if index < self.edid.len() {
-                        self.edid[index] = value;
-                        self.seen[index / 8] |= 1 << (index % 8);
-                        self.find_physical_address();
-                    }
-                    self.offset = self.offset.wrapping_add(1);
-                } else if self.byte_index == 1 {
-                    self.offset = value;
-                }
-            } else if self.target == 0x30 && !self.reading && self.byte_index == 1 {
-                self.segment = value;
-            }
-            self.byte_index += 1;
-        }
-    }
+pub fn init(sda: Sda, scl: Scl, pio0: PIO0, resets: &mut pac::RESETS) -> Ddc {
+    // MOV x/y, PINS reads GPIO6 (SDA) as bit 0 and GPIO7 (SCL) as bit 1.
+    // JMP PIN tests GPIO7. The program waits for a real SDA fall while SCL
+    // is high, then samples SDA once per SCL high period. A change in SDA
+    // before SCL falls is a START or STOP instead of a data bit.
+    let program = pio::pio_asm!(
+        ".wrap_target",
+        "idle:",
+        "wait 1 gpio 7",
+        "wait 1 gpio 6",
+        "wait 0 gpio 6",
+        "mov x, pins",
+        "jmp pin start",
+        "jmp idle",
+        "start:",
+        "mov isr, x",
+        "push block",
+        "bit:",
+        "wait 0 gpio 7",
+        "wait 1 gpio 7",
+        "mov y, pins",
+        "changed:",
+        "mov x, pins",
+        "jmp x!=y, handle",
+        "jmp changed",
+        "handle:",
+        "jmp pin sda_event",
+        "in y, 1",
+        "jmp bit",
+        "sda_event:",
+        "mov isr, x",
+        "push block",
+        "set y, 2",
+        "jmp x!=y, idle",
+        "jmp bit",
+        ".wrap"
+    )
+    .program;
 
-    fn captured(&self, index: usize) -> bool {
-        self.seen[index / 8] & (1 << (index % 8)) != 0
-    }
+    let (mut pio, sm0, _, _, _) = pio0.split(resets);
+    let installed = pio.install(&program).unwrap();
+    let (mut sm, rx, _tx) = PIOBuilder::from_installed_program(installed)
+        .in_pin_base(6)
+        .in_count(2)
+        .jmp_pin(7)
+        .autopush(true)
+        .push_threshold(9)
+        .buffers(Buffers::OnlyRx)
+        .build(sm0);
+    sm.set_pindirs([(6, PinDir::Input), (7, PinDir::Input)]);
+    let sda = sda.into_function::<FunctionPio0>();
+    let scl = scl.into_function::<FunctionPio0>();
 
-    fn find_physical_address(&self) {
-        if !self.captured(128) || self.edid[128] != 0x02 || !self.captured(130) {
-            return;
-        }
-        let end = self.edid[130].min(127) as usize + 128;
-        let mut index = 132;
-        while index < end {
-            if !self.captured(index) {
-                return;
-            }
-            let header = self.edid[index];
-            let next = index + 1 + (header & 31) as usize;
-            if next > end {
-                return;
-            }
-            if header >> 5 == 3
-                && next >= index + 6
-                && (index + 1..index + 6).all(|i| self.captured(i))
-                && self.edid[index + 1..index + 4] == [0x03, 0x0c, 0x00]
-            {
-                let address = u16::from_be_bytes([self.edid[index + 4], self.edid[index + 5]]);
-                PHYSICAL_ADDRESS.store(address, Ordering::Relaxed);
-                return;
-            }
-            index = next;
-        }
+    rx.enable_rx_not_empty_interrupt(PioIRQ::Irq0);
+    critical_section::with(|cs| {
+        CAPTURE.borrow_ref_mut(cs).replace(Capture {
+            rx,
+            ring: Deque::new(),
+        });
+    });
+    unsafe { hal::arch::interrupt_unmask(pac::Interrupt::PIO0_IRQ_0) };
+    let sm = sm.start();
+
+    Ddc {
+        decoder: Decoder::new(),
+        _sda: sda,
+        _scl: scl,
+        _sm: sm,
+        _pio: pio,
     }
 }
 
 #[allow(non_snake_case)]
 #[unsafe(no_mangle)]
-fn IO_IRQ_BANK0() {
+fn PIO0_IRQ_0() {
     critical_section::with(|cs| {
-        let mut borrow = STATE.borrow_ref_mut(cs);
-        let Some(state) = borrow.as_mut() else {
+        let mut borrow = CAPTURE.borrow_ref_mut(cs);
+        let Some(capture) = borrow.as_mut() else {
             return;
         };
-        let sda_low = state.sda.interrupt_status(gpio::Interrupt::EdgeLow);
-        let sda_high = state.sda.interrupt_status(gpio::Interrupt::EdgeHigh);
-        let scl_high = state.scl.interrupt_status(gpio::Interrupt::EdgeHigh);
-        if sda_low {
-            state.sda.clear_interrupt(gpio::Interrupt::EdgeLow);
+
+        while let Some(word) = capture.rx.read() {
+            capture.enqueue(word);
         }
-        if sda_high {
-            state.sda.clear_interrupt(gpio::Interrupt::EdgeHigh);
-        }
-        if scl_high {
-            state.scl.clear_interrupt(gpio::Interrupt::EdgeHigh);
-        }
-        if state.scl.is_high().unwrap_or(false) {
-            if sda_low {
-                state.start();
-            }
-            if sda_high {
-                state.active = false;
-            }
-        }
-        if scl_high {
-            state.rising_clock();
+        // RXSTALL is sticky. A stalled state machine can miss bus transitions
+        // even if all subsequently queued FIFO words are read successfully.
+        let pio = unsafe { &*PIO0::ptr() };
+        if pio.fdebug().read().rxstall().bits() & 1 != 0 {
+            pio.fdebug().write(|w| unsafe { w.rxstall().bits(1) });
+            capture.ring.clear();
+            capture.enqueue(GAP);
         }
     });
 }

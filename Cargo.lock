@@ -93,6 +93,7 @@ dependencies = [
  "heapless",
  "num_enum",
  "panic-halt",
+ "pio",
  "rp235x-hal",
  "usb-device",
  "usbd-serial",
