@@ -1,0 +1,20 @@
+[package]
+name = "cec-4k"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+
+[dependencies]
+cortex-m = "0.7.7"
+critical-section = "1.2.0"
+embedded-hal = "1.0.0"
+heapless = "0.8.0"
+panic-halt = "0.2.0"
+rp235x-hal = { version = "0.4.0", features = ["rt", "critical-section-impl"] }
+usb-device = "0.3.2"
+usbd-serial = "0.2.2"
+
+[profile.release-with-debug]
+inherits = "release"
+debug = 2
+strip = "none"

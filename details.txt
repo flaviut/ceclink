@@ -1,0 +1,454 @@
+    without borrowing someone else’s USB VID/PID.
+
+unnessecary constraint. we can just use their vid/pid
+
+will be using a XIAO RP-2350.
+Worked for 2m 47s
+
+Yes. With the XIAO RP2350, I would make it impersonate a Pulse-Eight USB-CEC adapter.
+
+That gets you about as close as possible to native Linux CEC without asking anyone to build a kernel module:
+HDMI CEC pin 13
+      │
+      ▼
+ RP2350 CEC PHY
+      │
+   PIO / GPIO
+      │
+ Pulse-Eight protocol
+      │
+ USB CDC ACM
+      │
+ /dev/ttyACM0
+      │
+ inputattach --pulse8-cec
+      │
+ in-tree pulse8-cec driver
+      │
+ /dev/cec0
+      │
+ standard Linux CEC API
+
+The kernel already has the Pulse-Eight CEC driver, and inputattach --pulse8-cec tells the serio layer to bind that TTY to it. Linux then exposes the normal /dev/cecX API.
+USB side
+
+Make the RP2350 enumerate as USB CDC ACM:
+VID: 0x2548
+PID: 0x1002
+
+Those are among the IDs Linux's documented Pulse-Eight udev rule looks for. The serial link is nominally 9600 baud, 8N1, although because it is USB CDC the actual physical USB transfer rate obviously isn't 9600 baud.
+
+On distros that ship the appropriate udev rule/service, plugging it in can result directly in:
+/dev/ttyACM0
+     ↓
+inputattach
+     ↓
+/dev/cec0
+
+SteamOS, for example, currently ships such automatic handling.
+
+The annoying caveat is that generic stock Linux does not have a USB device class for CEC. The Pulse-Eight kernel driver is a serio driver rather than a USB driver, so something still has to perform the inputattach operation. The upstream kernel documentation explicitly calls this out.
+
+So I'd distinguish:
+"No custom kernel":
+    absolutely achievable.
+
+"Zero software installation on every arbitrary Linux distro":
+    not quite guaranteed.
+
+"Plug-and-play on distros shipping the Pulse-Eight udev integration":
+    achievable by impersonating Pulse-Eight.
+
+If you're shipping a product, your fallback installer is tiny: a udev rule + systemd service + dependency on inputattach. No DKMS, no kernel patch, no kernel module.
+Firmware architecture
+
+The RP2350 is very well suited because CEC's weird pulse timing can live in a PIO state machine while USB and the Pulse-Eight command interpreter run on the CPU.
+
+I'd use:
+             ┌────────────────────┐
+USB CDC ────►│ Pulse8 command     │
+             │ parser             │
+             └─────────┬──────────┘
+                       │
+                   CEC frames
+                       │
+             ┌─────────▼──────────┐
+             │ CEC MAC/state      │
+             │ arbitration / ACK  │
+             └─────────┬──────────┘
+                       │
+             ┌─────────▼──────────┐
+             │ RP2350 PIO         │
+             │ precise timings    │
+             └─────────┬──────────┘
+                       │
+                    CEC PHY
+
+The Pulse-Eight framing is simple:
+0xff = message start
+0xfe = message end
+0xfd = escape
+
+bytes >= 0xfd are escaped
+
+The Linux driver source essentially documents the protocol for you.
+
+Important commands you'll need are roughly:
+PING
+SET_CONTROLLED
+SET_ACK_MASK
+
+TRANSMIT
+TRANSMIT_EOM
+TRANSMIT_IDLETIME
+TRANSMIT_ACK_POLARITY
+
+FIRMWARE_VERSION
+
+SET_AUTO_ENABLED
+SET_DEVICE_TYPE
+SET_LOGICAL_ADDRESS_MASK
+SET_DEFAULT_LOGICAL_ADDRESS
+SET_PHYSICAL_ADDRESS
+SET_HDMI_VERSION
+SET_OSD_NAME
+
+and RP2350 → host events:
+FRAME_START
+FRAME_DATA
+
+TRANSMIT_SUCCEEDED
+TRANSMIT_FAILED_ACK
+TRANSMIT_FAILED_LINE
+TRANSMIT_FAILED_TIMEOUT_*
+
+The Linux driver assembles CEC frames from FRAME_START/FRAME_DATA, and sends outgoing frames one byte at a time using TRANSMIT / TRANSMIT_EOM.
+
+For a first implementation I'd report a deliberately old/simple firmware version and implement only what the current Linux driver actually requires. You do not need to reproduce Pulse-Eight's autonomous-mode behavior or EEPROM semantics to get /dev/cec0 working.
+Hardware
+
+For a prototype, it's almost comically small.
+
+The RP2350 already has native USB device support, and its GPIO inputs at 3.3-V IOVDD tolerate up to 5.5 V, so the CEC bus's specified high level is within the powered GPIO input range. Its input thresholds are also a good match: at 3.3-V IOVDD, VIH starts at 2.0 V and VIL tops out at 0.8 V.
+
+CEC itself specifies approximately:
+LOW:       0 ... 0.6 V output
+HIGH:      2.5 ... 3.63 V
+pullup:    27 kΩ nominal/device
+open drain
+``` :chatgpt-content-reference{index="7"}
+
+
+I'd use **two RP2350 GPIOs** rather than one.
+
+```text
+                         HDMI pin 13
+                             │
+                             │ CEC
+                             +──────────────► RX GPIO
+                             │
+                           Drain
+                            │
+                        2N7002
+                            │
+                          Source
+                            │
+                           GND
+                            │
+                       HDMI pin 17
+
+RP2350 TX GPIO ──1k── Gate
+                      │
+                    100k
+                      │
+                     GND
+
+So:
+GPIO A = CEC_RX
+GPIO B = CEC_PULL_LOW
+
+TX never drives the CEC line high.
+
+It only does:
+TX=1 → MOSFET ON  → CEC LOW
+TX=0 → MOSFET OFF → CEC released
+
+That is much safer than dynamically switching an RP2350 GPIO between output-low and input because a firmware bug can never push 3.3 V onto a bus another device is pulling low.
+
+A 2N7002 or similar tiny NMOS is entirely adequate at CEC speeds.
+
+For the RX GPIO, I would put perhaps:
+CEC ---- 100Ω...1kΩ ---- RP2350 input
+
+and enable the GPIO Schmitt trigger.
+
+The RP2350/XIAO gives you lots of suitable pins; for example you could arbitrarily use:
+D0 / GPIO26 = CEC_RX
+D1 / GPIO27 = CEC_TX_GATE
+
+The XIAO pin mappings expose both normally.
+Pull-up
+
+For a bench prototype, I would initially not add your own 27 kΩ pull-up. A normal HDMI CEC network already contains CEC pull-ups from the participating HDMI equipment.
+
+See whether your TV/system behaves correctly.
+
+For a production/spec-compliant CEC endpoint, your device should participate correctly in the specified pull-up network, including the powered-off leakage requirements. The CEC specification's nominal device pull-up is 27 kΩ and places constraints on the unpowered state.
+
+That's the one place I would not try to save 30 cents in a product.
+Production version
+
+Use a proper HDMI control-line protection/level-shifter device.
+
+Something like the ST HDMI2C1-6C1 provides:
+
+    CEC bidirectional level shifting
+    CEC bus protection
+    backdrive protection
+    DDC protection/buffering
+    HPD conditioning
+
+and is explicitly intended for this problem.
+
+Older parts such as TI's TPD12S016/TPD5S115 do the same kind of job and even integrate the 27-kΩ CEC-side pull-up, though TPD5S115 is now not recommended for new designs.
+
+For CEC only, I wouldn't use the whole HDMI companion chip on rev A. I'd do:
+HDMI pin 13 ── ESD ──┬── RP2350 RX
+                      │
+                    NMOS
+                      │
+                     GND
+
+RP2350 TX ─────────── gate
+
+Then qualify the electrical behavior.
+What HDMI connections you actually need
+
+If your USB adapter is merely joining an existing PC→TV HDMI connection, your electronics only fundamentally need:
+HDMI pin 13  CEC
+HDMI pin 17  DDC/CEC ground
+
+You don't need TMDS.
+
+You don't need HDMI 5 V.
+
+You don't need HPD.
+
+You don't need DDC for actually sending CEC messages.
+
+So an inline adapter can simply do:
+HDMI IN ================================= HDMI OUT
+TMDS/DDC/HPD/etc       straight through
+
+CEC pin 13 -------------+----------------
+                         |
+                       RP2350
+
+That is probably the cleanest physical design.
+The one issue: physical address
+
+Linux CEC needs to know whether this source is e.g.:
+1.0.0.0
+2.0.0.0
+3.0.0.0
+
+A normal HDMI source discovers that through the sink's EDID.
+
+The Pulse-Eight USB dongle doesn't intrinsically know which GPU output it's attached to, either. Linux's documentation suggests deriving the CEC physical address from the DRM EDID:
+
+cec-ctl -E /sys/class/drm/card0-HDMI-A-1/edid
+``` :chatgpt-content-reference{index="12"}
+
+
+So your absolute-minimum hardware stays **CEC-only**.
+
+If later you want the adapter to autonomously discover its own HDMI topology, then add passive access to:
+
+```text
+pin 15 DDC SCL
+pin 16 DDC SDA
+pin 19 HPD, optionally
+
+But I would not do that in rev A.
+What I would build
+
+Literally:
+XIAO RP2350
++
+2N7002
++
+1 kΩ gate resistor
++
+100 kΩ gate pulldown
++
+~220 Ω RX series resistor
++
+low-capacitance ESD protection
++
+HDMI male/female pass-through PCB
+
+Firmware:
+TinyUSB CDC ACM
+      +
+Pulse-Eight protocol emulator
+      +
+PIO CEC engine
+
+USB identity:
+2548:1002
+
+Host result:
+$ ls /dev/cec*
+/dev/cec0
+
+$ cec-ctl -d /dev/cec0
+Driver Name : pulse8-cec
+...
+
+That's the architecture I'd choose. It avoids all custom kernel code, gives Linux applications the genuine kernel CEC API, and the RP2350 is wildly overqualified for the CEC physical layer.
+so I dont need i2c here on the rp2350?
+
+Correct: not for basic CEC operation.
+
+If the RP2350's job is just to bridge USB ↔ HDMI CEC, you only need:
+
+    HDMI pin 13: CEC
+    HDMI pin 17: ground
+
+The RP2350 can send/receive CEC without touching DDC/I²C at all.
+
+You would only need access to HDMI DDC/I²C if you want the adapter itself to read EDID and automatically determine things like the HDMI/CEC physical address.
+
+So the minimal architecture is:
+USB ↔ RP2350 ↔ CEC pin 13
+
+not:
+USB ↔ RP2350 ↔ CEC + DDC/I²C
+
+For your use case, I would leave DDC alone unless automatic EDID/physical-address discovery becomes a requirement.
+
+    automatic EDID/physical-address discovery becomes a requirement
+
+does linux automaticalyl figure it out for us?
+
+Not automatically for a standalone USB CEC dongle like the Pulse-Eight architecture.
+
+Linux knows the HDMI connector’s EDID through DRM, and that EDID contains the CEC physical address. But the kernel does not inherently know which DRM HDMI connector your random USB CEC adapter corresponds to. For integrated CEC hardware, DRM/CEC drivers can use the kernel CEC notifier framework to propagate the EDID-derived physical address automatically.
+
+For a Pulse-Eight-style USB dongle, upstream documentation instead recommends something like:
+
+cec-ctl -E /sys/class/drm/card0-HDMI-A-1/edid
+
+That monitors the DRM connector's EDID and updates /dev/cecX's physical address whenever it changes.
+
+So you have three architectures:
+1. CEC only on RP2350
+   HDMI: pin 13 + GND
+   Host must associate /dev/cec0 with the correct DRM connector
+   and feed its EDID/physical address to CEC.
+
+2. RP2350 also snoops/reads DDC
+   RP2350 learns its own physical address.
+   No DRM↔USB association problem.
+
+3. Custom kernel integration
+   DRM connector automatically informs your CEC adapter.
+   Clean internally, terrible deployment story.
+
+For an off-the-shelf product, #1 is probably still preferable if you can ship a tiny userspace/udev helper.
+
+The awkward part is not extracting the physical address—that's easy. It's figuring out:
+/dev/cec0 corresponds to which one?
+
+card0-HDMI-A-1
+card0-HDMI-A-2
+card1-HDMI-A-1
+...
+
+Linux cannot infer that from USB topology because CEC pin 13 has no relationship to USB.
+
+If your physical product is an inline HDMI adapter, though, I'd seriously consider tapping DDC SCL/SDA on the RP2350. Then the hardware knows exactly which HDMI link it's attached to and can extract the physical address from that link's EDID, eliminating the host-side connector-association problem entirely. The physical address sources are explicitly defined by the sink's EDID.
+
+And you don't necessarily need to become an I²C master: if you're inline, you can potentially passively observe the PC's EDID read and parse the relevant bytes. That may be the cleanest product architecture of all.
+2. RP2350 also snoops/reads DDC
+
+can i just put a diode on there to bring the 5V down to less so the rp2050 doesn't exceed the 3.3V limit?
+Stopped thinking
+again this is just snooping, never writing
+
+If you are strictly snooping SCL/SDA and will never drive them, it gets much simpler.
+
+A series diode still doesn’t help much: 5 V minus one diode drop is still around 4.3 V, which is not a safe way to guarantee a 3.3 V GPIO input.
+
+Use either a resistor divider or a 5-V-tolerant input buffer.
+
+For a prototype, a divider on each line is enough:
+HDMI DDC SCL ---- 100k ----+---- RP2350 GPIO
+                           |
+                          150k
+                           |
+                          GND
+
+At 5 V:
+Vgpio = 5 × 150 / (100 + 150)
+      = 3.0 V
+
+Same circuit for SDA.
+
+That adds only:
+5 V / 250k ≈ 20 µA
+
+of loading to each DDC line, so it barely affects the I²C bus.
+
+For a production design, I would use something like a 74LVC2G17 powered from 3.3 V:
+HDMI SCL ──> 5-V-tolerant input ──> RP2350 SCL_GPIO
+HDMI SDA ──> 5-V-tolerant input ──> RP2350 SDA_GPIO
+
+Advantages:
+
+    essentially no loading on DDC
+    converts cleanly to 3.3 V
+    Schmitt-trigger inputs give better noise immunity
+    RP2350 is isolated from HDMI-side transients
+    still completely passive from the DDC bus's perspective
+
+Then your architecture becomes:
+HDMI
+ │
+ ├── CEC ─────────────── RP2350 CEC TX/RX
+ │
+ ├── DDC SCL ──buffer──> RP2350 input only
+ │
+ └── DDC SDA ──buffer──> RP2350 input only
+
+And yes: because you're just sniffing, you do not need an I²C peripheral at all. You can capture SCL/SDA using GPIO/PIO and decode I²C passively. You never ACK, clock-stretch, or pull either line low.
+
+That is probably exactly what I'd do on the XIAO RP2350: CEC gets a proper open-drain transistor interface; DDC gets two high-impedance receive-only inputs.
+can i kinda just make it work with a 100k resistor on each line?
+
+For a bench prototype, yes, a single 100 kΩ series resistor per DDC line will probably work for receive-only sniffing, but it relies on the RP2350's input protection clamp.
+
+Conceptually:
+HDMI SCL (≈5 V) ── 100k ── RP2350 GPIO
+HDMI SDA (≈5 V) ── 100k ── RP2350 GPIO
+
+When the DDC line is high, the GPIO's protection diode clamps the pin near IOVDD + a diode drop. The 100 kΩ limits injection current to roughly tens of µA:
+(5 V - ~3.6 V) / 100k ≈ 14 µA
+
+That's tiny, so as a hack/prototype, I'd expect it to behave.
+
+Two caveats:
+
+    It is technically operating the GPIO beyond its normal input-voltage specification and relying on its protection structure.
+    If the XIAO is unpowered while HDMI remains connected, current can leak through that GPIO and partially back-power the RP2350's 3.3 V rail.
+
+A trivially better version costs one more resistor:
+HDMI DDC ── 100k ──+── GPIO
+                   |
+                  150k
+                   |
+                  GND
+
+Now 5 V becomes ~3 V and you're no longer relying on a clamp. At DDC speeds, 100k/150k should still be fine for sniffing, since the GPIO capacitance is small.
+
+Also, correction to my earlier answer: I was too loose in saying the RP2350 GPIO itself could simply tolerate the 5 V DDC high level. I would not connect 5 V DDC directly to an RP2350 GPIO. The resistor-limited hack is a materially different situation.

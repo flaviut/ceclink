@@ -1,0 +1,1 @@
+seeed studio xiao rp2350. CEC is on D9, I2C sniffing is on pin D4 SDA & D5 SCL
