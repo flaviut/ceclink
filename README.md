@@ -33,11 +33,15 @@ If you used `nix build .#firmware`, flash `result/ceclink.uf2` instead.
 
 The normal USB connection does not provide JTAG or SWD. The USB reset interface described below can enter BOOTSEL for fwupd; the BOOT button remains available for manual flashing.
 
+## NixOS integration
+
+Add this repository as a flake input and import `inputs.ceclink.nixosModules.default` on the host. The module loads the Pulse-Eight kernel driver, starts `inputattach` only for the CEC USB interface, creates `/dev/ceclink-debug` for the diagnostics interface, and enables fwupd support. Members of the `video` group can read the diagnostics port.
+
 ## fwupd on NixOS
 
 The firmware exposes Raspberry Pi's USB reset interface alongside CDC ACM. fwupd's existing `rp-pico` plugin uses that interface to enter RP2350 BOOTSEL, then its `uf2` plugin writes the UF2 image. The overlay adds device matching for this adapter and the RP2350 ROM's `2e8a:000f` USB identity.
 
-In a NixOS flake, include this repository as an input named `ceclink` and add `inputs.ceclink.nixosModules.fwupd` to the host's module list. Alternatively, add `inputs.ceclink.overlays.default` to `nixpkgs.overlays` and enable `services.fwupd.enable = true;`. Rebuild the NixOS configuration, then flash a firmware containing the USB reset interface once using the manual method above. `fwupdmgr get-devices` should then show the adapter as updatable. A signed or local fwupd CAB containing the UF2 and release metadata is still required for `fwupdmgr update` to offer an update.
+Rebuild the NixOS configuration, then flash a firmware containing the USB reset interface once using the manual method above. `fwupdmgr get-devices` should then show the adapter as updatable. A signed or local fwupd CAB containing the UF2 and release metadata is still required for `fwupdmgr update` to offer an update.
 
 The runtime quirk selects fwupd's `rp-pico` plugin by VID:PID; that plugin also checks for the USB reset interface, which ordinary Pulse-Eight adapters lack. Increment the firmware's USB `device_release` for future firmware versions so fwupd can report the installed version. The RP2350 ROM BOOTSEL button remains a recovery path.
 
