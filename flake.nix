@@ -51,7 +51,7 @@
         nixpkgs.overlays = [ self.overlays.default ];
         environment.systemPackages = [ pkgs.v4l-utils ];
         services.fwupd.enable = true;
-        boot.kernelModules = [ "pulse8-cec" ];
+        boot.kernelModules = [ "pulse8-cec" "i2c-dev" ];
         boot.extraModulePackages = [
           (pkgs.pulse8Cec config.boot.kernelPackages)
         ];
@@ -76,6 +76,7 @@
           description = "Apply CECLink physical address from %I";
           bindsTo = [ "dev-%i.device" ];
           after = [ "dev-%i.device" ];
+          path = [ pkgs.ddcutil ];
           serviceConfig = {
             Type = "simple";
             ExecStart = "${
