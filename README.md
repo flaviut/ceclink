@@ -1,8 +1,70 @@
-# CECLink RP2350 firmware
+# CECLink
 
-Rust firmware for a Seeed XIAO RP2350 inline HDMI CEC adapter. The build produces a UF2 and ELF using pinned Nix and Cargo dependencies.
+The CECLink is a small device that can be used to allow a Linux computer to control a TV using the CEC protocol over HDMI. This is particularly helpful for HTPCs, which often do not have the required hardware to do so built-in.
 
-## Build
+What's unique about this device is that it supports higher HDMI bandwidths. It is designed to work with and tested on a 4k, 10-bit HDR, 60FPS signal. This is done through following best practices for high-speed data lines.
+
+While others devices look like this, and are made on a standard PCB (thanks [karl for the photo](https://karlquinsland.com/pulse-eight-hdmi-cec-injector-teardown/)):
+
+![Wires passing straight through a HDMI connector](./docs/straight-through.jpeg)
+
+This project's design, which looks a lot more random, is made on a controlled-impedance PCB and contains the secrets of the RF signal dark arts:
+
+![matched pairs for video lines](./docs/matched-pairs.jpeg)
+
+To be clear, this is not a secret technique! I would love to see others use this technique, and offer an updated commercial version of this device! All the details on how it works are in this source repo under `pcbs/`, and I would be happy to talk about it.
+
+## Making your own
+
+### PCB
+
+The hardware is split across two KiCad projects under [`pcb/`](pcb). You will
+need to have *both* these boards produced:
+
+* [`pcb/hdmi-breakout`](pcb/hdmi-breakout) — the HDMI passthrough breakout that
+  carries the CEC and DDC signals. This is a 4-layer board; order it with the
+  **JLC04161H-7628 stackup**. Stackup is not a minor detail; incorrect stackup
+  will destroy performance.
+* [`pcb/rp2040-adaptor`](pcb/rp2040-adaptor) — a simple breakout for the RP2040-Zero
+  that connects to the HDMI breakout. This is an ordinary **2-layer** board with
+  no controlled-impedance requirement, so any standard stackup is fine.
+
+Shared symbols and footprints live in [`pcb/library`](pcb/library). Fabrication
+outputs (gerbers, BOM, CPL) for each board can be generated with
+[`jlcpcb_fab.py`](jlcpcb_fab.py).
+
+Additional BOM (parts to source separately on top of the fabricated boards):
+
+| Count | Part |
+| ----- | ---- |
+| 2 | HDMI Type-A receptacle (Molex 208658-1001, LCSC C138388) |
+| 1 | Waveshare RP2040-Zero |
+| 2 | 1×9 2.54mm male pin header strip |
+| 2 | 1×9 2.54mm female header / socket strip |
+| 2 | M3 × 16mm socket head cap screw |
+| 2 | M3 nut |
+
+Remember that you can easily cut a longer 2.54mm header to size with some snips.
+
+### Initial flash
+
+Download the most recent release's `.uf2` file from the github sidebar.
+
+Hold the BOOT button while connecting the USB cable. Once powered, you should see a new drive on your computer. Copy-paste the `.uf2` file over, and your device should be flashed.
+
+### Operating system integration
+
+This project tries to make use of the operating system drivers for the bulk of the integration, but this is unfortunately not fully sufficient.
+
+#### CLI alternative
+
+```sh
+picotool load -v -x ceclink.uf2
+```
+
+## Development
+
+### Building
 
 ```sh
 nix develop
@@ -20,18 +82,6 @@ ls result/ceclink.{uf2,elf}
 ```
 
 Format the Nix and Rust sources with `nix fmt`.
-
-## Flash
-
-Hold the XIAO RP2350's BOOT button while connecting its USB cable, then release the button to enter BOOTSEL mode. From the dev shell, flash the UF2 built above and reboot into the firmware:
-
-```sh
-picotool load -v -x ceclink.uf2
-```
-
-If you used `nix build .#firmware`, flash `result/ceclink.uf2` instead.
-
-The normal USB connection does not provide JTAG or SWD. The USB reset interface described below can enter BOOTSEL for fwupd; the BOOT button remains available for manual flashing.
 
 ## NixOS integration
 
@@ -78,17 +128,3 @@ For an active EDID read from the HDMI connector, use `nix run nixpkgs#ddcutil --
 | D5 | GPIO7 | DDC SCL input only |
 
 D4 and D5 are receive-only GPIO inputs, not I²C master pins. Use a 100kΩ resistor between the HDMI bus and the RP2350.
-
-## Firmware structure
-
-- [`src/main.rs`](src/main.rs): RP2350 clocks, pins, two USB CDC interfaces, and core startup.
-- [`src/debug_port.rs`](src/debug_port.rs): stable status and requested diagnostics on the second USB serial port.
-- [`src/cec.rs`](src/cec.rs): CEC timing engine on core 1.
-- [`src/ddc.rs`](src/ddc.rs): passive PIO capture and an interrupt that copies I²C records into a 512-word SRAM ring.
-- [`src/ddc_protocol.rs`](src/ddc_protocol.rs): foreground I²C/EDID decoding and CTA HDMI VSDB physical address extraction.
-- [`src/pulse8.rs`](src/pulse8.rs): Pulse-Eight serial framing and Linux driver command subset.
-- [`src/transport.rs`](src/transport.rs): short critical sections for cross-core messages.
-
-The USB device uses Pulse-Eight VID:PID `2548:1002`, as specified in `details.txt`, and reports `CECLink` / `RP2350 HDMI CEC Adapter` as its USB manufacturer and product strings. Its USB serial number is the RP2350's 64-bit chip ID in hexadecimal; if the ID cannot be read, the serial descriptor is omitted. On Linux, attach the in-tree driver to the `Pulse-Eight CEC control` interface with `inputattach --pulse8-cec /dev/ttyACM0`; the TTY number may differ. The status interface is a separate TTY and must not be passed to `inputattach`. Setting the serial line discipline may require root privileges. The kernel CEC device should then appear as `/dev/cec*`. If an autoattach udev rule matches the manufacturer or product strings, update it to match the CEC interface or use the VID:PID and interface number together.
-
-The DDC sniffer only learns an address when it sees the host read the relevant EDID extension. A PIO FIFO stall or SRAM ring overflow discards the incomplete capture and waits for a new I²C START. DDC timing and capture still need hardware testing.
