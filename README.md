@@ -7,7 +7,7 @@ Rust firmware for a Seeed XIAO RP2350 inline HDMI CEC adapter. The build produce
 ```sh
 nix develop
 cargo build --locked --profile release-with-debug
-picotool uf2 convert target/thumbv8m.main-none-eabihf/release-with-debug/cec-4k cec-4k.uf2
+picotool uf2 convert target/thumbv8m.main-none-eabihf/release-with-debug/cec-4k -t elf cec-4k.uf2
 ```
 
 If direnv is enabled in your shell, run `direnv allow` once in this directory to enter the flake dev shell automatically.
@@ -31,7 +31,7 @@ picotool load -v -x cec-4k.uf2
 
 If you used `nix build .#firmware`, flash `result/cec-4k.uf2` instead.
 
-After flashing a firmware with the diagnostic command, `python3 tools/ddc_diag.py --bootsel` enters BOOTSEL over the USB serial connection for the next update. The normal USB connection does not provide JTAG or SWD.
+The normal USB connection does not provide JTAG or SWD. The USB reset interface described below can enter BOOTSEL for fwupd; the BOOT button remains available for manual flashing.
 
 ## fwupd on NixOS
 
@@ -43,11 +43,17 @@ The runtime quirk selects fwupd's `rp-pico` plugin by VID:PID; that plugin also 
 
 ## DDC diagnostics
 
-Run `python3 tools/ddc_diag.py` for a snapshot or add `--watch` while reading the monitor's EDID. It reports live SDA/SCL levels, PIO START/STOP and byte counts, FIFO stalls, ring overflows, EDID decoder counts, and the first two raw words after the latest START. This command uses firmware-specific serial code `0x40` and does not require the Linux CEC driver.
+The device exposes a second USB CDC ACM port named `DDC debug`, separate from the Pulse-Eight CEC port. On Linux, the persistent `/dev/serial/by-id/usb-CEC_4K_RP2350_HDMI_CEC_Adapter_<chip-id>-if00` link identifies the CEC port and the matching `-if02` link identifies the debug port. Find it with `ls /dev/serial/by-id/*RP2350_HDMI_CEC_Adapter*-if02`, then open that path with `cat`. The `DDC debug` interface label is visible in USB descriptors but is not included in the by-id link name. While the port is open, it sends one tab-separated `key=value` line per second. The first record is sent immediately. Fields have stable names and decimal integer values; `version=1` identifies the format. `sda` and `scl` are 0 or 1, `trace_0` and `trace_1` are raw PIO words, and `physical_address=65535` means unknown. The counters are cumulative since boot. For example:
+
+```text
+version=1\tuptime_ms=1234\tsda=1\tscl=1\tring_used=0\tring_peak=4\tstarts=2\tstops=2\twords=12\tfifo_stalls=0\tring_overflows=0\ttrace_len=2\ttrace_0=0\ttrace_1=0\tedid_write_addresses=1\tedid_read_addresses=1\tedid_bytes=8\tinvalid_words=0\tunacknowledged_addresses=0\tpio_pc=7\trx_empty=1\trx_full=0\tphysical_address=4096
+```
+
+The separators in the actual output are tab characters. The debug port requires no host command and remains available while the Linux CEC driver owns the other serial port.
 
 The onboard RGB LED uses GPIO22 for data and GPIO23 for power. Blue means the firmware is running but has not captured a DDC START. Amber means DDC traffic was captured but no physical address was found. Red means a FIFO stall or SRAM ring overflow occurred. Green means the physical address was found. The serial diagnostics give the exact counters and GPIO levels.
 
-For an active EDID read from the HDMI connector, use `nix run nixpkgs#ddcutil -- --edid-read-size=256 --disable-try-get-edid-from-sysfs detect` while the adapter is in the HDMI path. Compare snapshots before and after the read. A guarded serial command (`0x41` with literal payload `RP25`) enters BOOTSEL; `tools/ddc_diag.py --bootsel` sends it.
+For an active EDID read from the HDMI connector, use `nix run nixpkgs#ddcutil -- --edid-read-size=256 --disable-try-get-edid-from-sysfs detect` while the adapter is in the HDMI path. Compare counter values before and after the read.
 
 ## Connections
 
@@ -61,13 +67,14 @@ D4 and D5 are receive-only GPIO inputs, not I²C master pins. Use a 100kΩ resis
 
 ## Firmware structure
 
-- [`src/main.rs`](src/main.rs): RP2350 clocks, pins, USB CDC, and core startup.
+- [`src/main.rs`](src/main.rs): RP2350 clocks, pins, two USB CDC interfaces, and core startup.
+- [`src/debug_port.rs`](src/debug_port.rs): periodic diagnostics on the second USB serial port.
 - [`src/cec.rs`](src/cec.rs): CEC timing engine on core 1.
 - [`src/ddc.rs`](src/ddc.rs): passive PIO capture and an interrupt that copies I²C records into a 512-word SRAM ring.
 - [`src/ddc_protocol.rs`](src/ddc_protocol.rs): foreground I²C/EDID decoding and CTA HDMI VSDB physical address extraction.
 - [`src/pulse8.rs`](src/pulse8.rs): Pulse-Eight serial framing and Linux driver command subset.
 - [`src/transport.rs`](src/transport.rs): short critical sections for cross-core messages.
 
-The USB device uses Pulse-Eight VID:PID `2548:1002`, as specified in `details.txt`, and reports `CEC 4K` / `RP2350 HDMI CEC Adapter` as its USB manufacturer and product strings. Its USB serial number is the RP2350's 64-bit chip ID in hexadecimal; if the ID cannot be read, the serial descriptor is omitted. On Linux, attach the in-tree driver with `inputattach --pulse8-cec /dev/ttyACM0`; the TTY name may differ. Setting the serial line discipline may require root privileges. The kernel CEC device should then appear as `/dev/cec*`. If an autoattach udev rule matches the manufacturer or product strings, update it to match these strings or use the VID:PID instead.
+The USB device uses Pulse-Eight VID:PID `2548:1002`, as specified in `details.txt`, and reports `CEC 4K` / `RP2350 HDMI CEC Adapter` as its USB manufacturer and product strings. Its USB serial number is the RP2350's 64-bit chip ID in hexadecimal; if the ID cannot be read, the serial descriptor is omitted. On Linux, attach the in-tree driver to the `Pulse-Eight CEC control` interface with `inputattach --pulse8-cec /dev/ttyACM0`; the TTY number may differ. The `DDC debug` interface is a separate TTY and must not be passed to `inputattach`. Setting the serial line discipline may require root privileges. The kernel CEC device should then appear as `/dev/cec*`. If an autoattach udev rule matches the manufacturer or product strings, update it to match the CEC interface or use the VID:PID and interface number together.
 
 The DDC sniffer only learns an address when it sees the host read the relevant EDID extension. A PIO FIFO stall or SRAM ring overflow discards the incomplete capture and waits for a new I²C START. DDC timing and capture still need hardware testing.

@@ -15,6 +15,7 @@ use usbd_serial::SerialPort;
 mod cec;
 mod ddc;
 mod ddc_protocol;
+mod debug_port;
 mod pulse8;
 mod status_led;
 mod transport;
@@ -96,7 +97,9 @@ fn main() -> ! {
         true,
         &mut pac.RESETS,
     ));
-    let mut serial = SerialPort::new(&usb_bus);
+    let mut serial =
+        SerialPort::new_with_interface_names(&usb_bus, Some("Pulse-Eight CEC control"), None);
+    let mut debug_serial = SerialPort::new_with_interface_names(&usb_bus, Some("DDC debug"), None);
     let mut usb_reset = usb_reset::UsbReset::new(&usb_bus);
     let mut serial_number_buffer = [0u8; 16];
     let mut strings = StringDescriptors::default()
@@ -114,11 +117,12 @@ fn main() -> ! {
 
     let mut protocol = pulse8::Protocol::new();
     let mut pending_output = None;
+    let mut debug_output = debug_port::DebugOutput::new();
     let mut usb_bootsel_requested_at = None;
     loop {
         ddc.poll();
         led.update(ddc.led_state());
-        let _ = device.poll(&mut [&mut serial, &mut usb_reset]);
+        let _ = device.poll(&mut [&mut serial, &mut debug_serial, &mut usb_reset]);
         let mut bytes = [0u8; 64];
         if let Ok(count) = serial.read(&mut bytes) {
             for &byte in &bytes[..count] {
@@ -129,15 +133,13 @@ fn main() -> ! {
             protocol.event(event);
         }
         protocol.set_physical_address(ddc.physical_address());
-        if protocol.take_diagnostic_request() {
-            protocol.reply_diagnostics(&ddc.diagnostic_bytes());
-        }
+        debug_output.poll(&mut debug_serial, usb_timer.get_counter().ticks(), &ddc);
         if usb_reset.take_bootsel_request() {
             usb_bootsel_requested_at = Some(usb_timer.get_counter_low());
         }
         let usb_bootsel_ready = usb_bootsel_requested_at
             .is_some_and(|at| usb_timer.get_counter_low().wrapping_sub(at) >= 50_000);
-        if protocol.take_bootsel_request() || usb_bootsel_ready {
+        if usb_bootsel_ready {
             hal::reboot::reboot(
                 hal::reboot::RebootKind::BootSel {
                     picoboot_disabled: false,
