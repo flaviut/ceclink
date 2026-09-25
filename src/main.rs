@@ -21,6 +21,22 @@ mod transport;
 static IMAGE_DEF: hal::block::ImageDef = hal::block::ImageDef::secure_exe();
 static CORE1_STACK: Stack<4096> = Stack::new();
 
+fn usb_serial_number(buffer: &mut [u8; 16]) -> Option<&str> {
+    let chip = hal::rom_data::sys_info_api::chip_info().ok().flatten()?;
+    // The HAL's wafer_id field holds the high 32 bits of the RP2350 chip ID.
+    for (index, word) in [chip.wafer_id, chip.device_id].into_iter().enumerate() {
+        for digit in 0..8 {
+            let nibble = ((word >> (28 - digit * 4)) & 0xf) as u8;
+            buffer[index * 8 + digit] = if nibble < 10 {
+                b'0' + nibble
+            } else {
+                b'A' + nibble - 10
+            };
+        }
+    }
+    core::str::from_utf8(buffer).ok()
+}
+
 #[hal::entry]
 fn main() -> ! {
     let mut pac = hal::pac::Peripherals::take().unwrap();
@@ -67,11 +83,15 @@ fn main() -> ! {
         &mut pac.RESETS,
     ));
     let mut serial = SerialPort::new(&usb_bus);
+    let mut serial_number_buffer = [0u8; 16];
+    let mut strings = StringDescriptors::default()
+        .manufacturer("CEC 4K")
+        .product("RP2350 HDMI CEC Adapter");
+    if let Some(serial_number) = usb_serial_number(&mut serial_number_buffer) {
+        strings = strings.serial_number(serial_number);
+    }
     let mut device = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x2548, 0x1002))
-        .strings(&[StringDescriptors::default()
-            .manufacturer("CEC 4K")
-            .product("RP2350 HDMI CEC Adapter")
-            .serial_number("CEC4K-RP2350")])
+        .strings(&[strings])
         .unwrap()
         .device_class(2)
         .build();
