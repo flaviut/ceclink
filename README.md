@@ -10,6 +10,8 @@ cargo build --locked --profile release-with-debug
 picotool uf2 convert target/thumbv8m.main-none-eabihf/release-with-debug/cec-4k cec-4k.uf2
 ```
 
+If direnv is enabled in your shell, run `direnv allow` once in this directory to enter the flake dev shell automatically.
+
 For a reproducible production artifact:
 
 ```sh
@@ -18,6 +20,16 @@ ls result/cec-4k.{uf2,elf}
 ```
 
 Format the Nix and Rust sources with `nix fmt`.
+
+## Flash
+
+Hold the XIAO RP2350's BOOT button while connecting its USB cable, then release the button to enter BOOTSEL mode. From the dev shell, flash the UF2 built above and reboot into the firmware:
+
+```sh
+picotool load -v -x cec-4k.uf2
+```
+
+If you used `nix build .#firmware`, flash `result/cec-4k.uf2` instead.
 
 ## Connections
 
