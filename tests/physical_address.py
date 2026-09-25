@@ -80,46 +80,40 @@ class PhysicalAddressTests(unittest.TestCase):
                 self.assertTrue(helper.apply_address(device, 0xFFFF))
             self.assertEqual(writes, [0x1000, 0x1000, 0xFFFF])
 
-    def test_ddc_buses_cover_all_hdmi_connectors(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            drm = root / "class/drm"
-            drm.mkdir(parents=True)
-            for name, status, bus in (
-                ("card1-HDMI-A-1", "connected", 5),
-                ("card1-HDMI-A-2", "disconnected", 6),
-                ("card2-HDMI-A-1", "connected", 9),
-                ("card2-DP-1", "connected", 10),
-            ):
-                connector = drm / name
-                connector.mkdir()
-                (connector / "status").write_text(status)
-                i2c = root / f"i2c-{bus}"
-                i2c.mkdir()
-                (connector / "ddc").symlink_to(i2c)
-            self.assertEqual(helper.ddc_buses(root), [5, 6, 9])
-
-    def test_recovery_reads_every_hdmi_bus_and_bounds_retries(self):
+    def test_recovery_scans_displays_and_bounds_retries(self):
         recovery = helper.EdidRecovery()
-        with patch.object(helper, "ddc_buses", return_value=[5, 9]), patch.object(
-            helper.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)
-        ) as run, patch.object(helper.time, "monotonic", side_effect=[1.0, 7.0, 13.0]):
+        with patch.object(helper.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)) as run, patch.object(
+            helper.time, "monotonic", side_effect=[1.0, 7.0, 13.0]
+        ):
             self.assertTrue(recovery.observe(0xFFFF, 0.0))
             self.assertTrue(recovery.observe(0xFFFF, 2.0))
             self.assertTrue(recovery.observe(0xFFFF, 6.0))
             self.assertTrue(recovery.observe(0xFFFF, 12.0))
             self.assertTrue(recovery.observe(0xFFFF, 15.0))
             self.assertFalse(recovery.observe(0xFFFF, 18.0))
-            self.assertEqual(run.call_count, 6)
-            self.assertEqual(
-                [call.args[0][1] for call in run.call_args_list],
-                ["--bus=5", "--bus=9"] * 3,
-            )
+            self.assertEqual(run.call_count, 3)
             for call in run.call_args_list:
+                self.assertNotIn("--bus", " ".join(call.args[0]))
                 self.assertIn("--edid-read-size=256", call.args[0])
                 self.assertIn("--disable-try-get-edid-from-sysfs", call.args[0])
             self.assertFalse(recovery.observe(0x3000, 19.0))
             self.assertEqual(recovery.attempts, 0)
+
+    def test_transient_unknown_during_edid_read_does_not_start_another_scan(self):
+        filt = helper.AddressFilter()
+        recovery = helper.EdidRecovery()
+        with patch.object(helper.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run, patch.object(
+            helper.time, "monotonic", return_value=2.1
+        ):
+            self.assertIsNone(helper.ready_address(filt, recovery, 0xFFFF, 0.0))
+            self.assertIsNone(helper.ready_address(filt, recovery, 0xFFFF, 2.1))
+            self.assertEqual(run.call_count, 1)
+            self.assertIsNone(helper.ready_address(filt, recovery, 0x3000, 2.2))
+            self.assertIsNone(helper.ready_address(filt, recovery, 0xFFFF, 2.3))
+            self.assertEqual(run.call_count, 1)
+            self.assertIsNone(helper.ready_address(filt, recovery, 0x3000, 2.4))
+            self.assertEqual(helper.ready_address(filt, recovery, 0x3000, 3.0), 0x3000)
+            self.assertEqual(run.call_count, 1)
 
 
 if __name__ == "__main__":
