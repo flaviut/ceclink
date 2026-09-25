@@ -1,5 +1,5 @@
 {
-  description = "XIAO RP2350 HDMI CEC adapter firmware";
+  description = "CECLink firmware for the XIAO RP2350 HDMI CEC adapter";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -44,8 +44,8 @@
       overlays.default = final: prev: {
         fwupd = prev.fwupd.overrideAttrs (old: {
           postInstall = (old.postInstall or "") + ''
-            install -Dm644 ${./nix/cec-4k.quirk} \
-              "$out/share/fwupd/quirks.d/cec-4k.quirk"
+            install -Dm644 ${./nix/ceclink.quirk} \
+              "$out/share/fwupd/quirks.d/ceclink.quirk"
           '';
         });
       };
@@ -102,7 +102,7 @@
             rustc = rust;
           };
           firmware = rustPlatform.buildRustPackage {
-            pname = "cec-4k-rp2350";
+            pname = "ceclink-rp2350";
             version = "0.1.0";
             src = self;
             cargoLock.lockFile = ./Cargo.lock;
@@ -117,8 +117,8 @@
             installPhase = ''
               runHook preInstall
               mkdir -p "$out"
-              cp target/${target}/release-with-debug/cec-4k "$out/cec-4k.elf"
-              picotool uf2 convert "$out/cec-4k.elf" "$out/cec-4k.uf2"
+              cp target/${target}/release-with-debug/ceclink "$out/ceclink.elf"
+              picotool uf2 convert "$out/ceclink.elf" "$out/ceclink.uf2"
               runHook postInstall
             '';
           };

@@ -103,7 +103,7 @@ fn main() -> ! {
     let mut usb_reset = usb_reset::UsbReset::new(&usb_bus);
     let mut serial_number_buffer = [0u8; 16];
     let mut strings = StringDescriptors::default()
-        .manufacturer("CEC 4K")
+        .manufacturer("CECLink")
         .product("RP2350 HDMI CEC Adapter");
     if let Some(serial_number) = usb_serial_number(&mut serial_number_buffer) {
         strings = strings.serial_number(serial_number);

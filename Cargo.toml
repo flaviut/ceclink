@@ -1,5 +1,5 @@
 [package]
-name = "cec-4k"
+name = "ceclink"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
@@ -9,7 +9,7 @@ default = ["firmware"]
 firmware = []
 
 [[bin]]
-name = "cec-4k"
+name = "ceclink"
 required-features = ["firmware"]
 
 [dependencies]
