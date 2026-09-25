@@ -39,7 +39,7 @@ D4 and D5 are receive-only GPIO inputs, not I²C master pins. Level shift or div
 - [`src/pulse8.rs`](src/pulse8.rs): Pulse-Eight serial framing and Linux driver command subset.
 - [`src/transport.rs`](src/transport.rs): short critical sections for cross-core messages.
 
-The USB device uses Pulse-Eight VID:PID `2548:1002`, as specified in `details.txt`. On Linux, attach the in-tree driver with `inputattach --pulse8-cec /dev/ttyACM0`; the TTY name may differ. The kernel CEC device should then appear as `/dev/cec*`.
+The USB device uses Pulse-Eight VID:PID `2548:1002`, as specified in `details.txt`, and reports `CEC 4K` / `RP2350 HDMI CEC Adapter` as its USB manufacturer and product strings. On Linux, attach the in-tree driver with `inputattach --pulse8-cec /dev/ttyACM0`; the TTY name may differ. The kernel CEC device should then appear as `/dev/cec*`. If an autoattach udev rule matches the manufacturer or product strings, update it to match these strings or use the VID:PID instead.
 
 ## Current limits
 

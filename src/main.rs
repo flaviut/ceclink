@@ -69,8 +69,8 @@ fn main() -> ! {
     let mut serial = SerialPort::new(&usb_bus);
     let mut device = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x2548, 0x1002))
         .strings(&[StringDescriptors::default()
-            .manufacturer("Pulse-Eight")
-            .product("CEC Adapter")
+            .manufacturer("CEC 4K")
+            .product("RP2350 HDMI CEC Adapter")
             .serial_number("CEC4K-RP2350")])
         .unwrap()
         .device_class(2)
