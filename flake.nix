@@ -37,6 +37,10 @@
       target = "thumbv8m.main-none-eabihf";
     in
     {
+      overlays.pulse8Cec = _final: _prev: {
+        pulse8Cec = kernelPackages: kernelPackages.callPackage ./nix/pulse8-cec.nix { };
+      };
+
       overlays.default = final: prev: {
         fwupd = prev.fwupd.overrideAttrs (old: {
           postInstall = (old.postInstall or "") + ''
