@@ -17,6 +17,8 @@ nix build .#firmware
 ls result/cec-4k.{uf2,elf}
 ```
 
+Format the Nix and Rust sources with `nix fmt`.
+
 ## Connections
 
 | XIAO pin | RP2350 GPIO | Role |

@@ -9,34 +9,77 @@
     };
   };
 
-  outputs = { self, nixpkgs, rust-overlay }:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      rust-overlay,
+    }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" ];
-      forSystems = f: nixpkgs.lib.genAttrs systems (system: f (import nixpkgs {
-        inherit system;
-        overlays = [ rust-overlay.overlays.default ];
-      }));
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+      forSystems =
+        f:
+        nixpkgs.lib.genAttrs systems (
+          system:
+          f (
+            import nixpkgs {
+              inherit system;
+              overlays = [ rust-overlay.overlays.default ];
+            }
+          )
+        );
       target = "thumbv8m.main-none-eabihf";
-    in {
-      devShells = forSystems (pkgs:
+    in
+    {
+      formatter = forSystems (
+        pkgs:
+        pkgs.writeShellApplication {
+          name = "treefmt";
+          runtimeInputs = [
+            pkgs.treefmt
+            pkgs.nixfmt
+            pkgs.rustfmt
+          ];
+          text = ''exec treefmt --config-file ${./treefmt.toml} "$@"'';
+        }
+      );
+
+      devShells = forSystems (
+        pkgs:
         let
           rust = pkgs.rust-bin.stable."1.98.1".minimal.override {
             targets = [ target ];
-            extensions = [ "rustfmt" "clippy" ];
+            extensions = [
+              "rustfmt"
+              "clippy"
+            ];
           };
-        in {
+        in
+        {
           default = pkgs.mkShell {
-            packages = [ rust pkgs.picotool pkgs.elf2uf2-rs ];
+            packages = [
+              rust
+              pkgs.picotool
+              pkgs.elf2uf2-rs
+            ];
             shellHook = ''
               echo 'Build: cargo build --profile release-with-debug'
             '';
           };
-        });
+        }
+      );
 
-      packages = forSystems (pkgs:
+      packages = forSystems (
+        pkgs:
         let
           rust = pkgs.rust-bin.stable."1.98.1".minimal.override { targets = [ target ]; };
-          rustPlatform = pkgs.makeRustPlatform { cargo = rust; rustc = rust; };
+          rustPlatform = pkgs.makeRustPlatform {
+            cargo = rust;
+            rustc = rust;
+          };
           firmware = rustPlatform.buildRustPackage {
             pname = "cec-4k-rp2350";
             version = "0.1.0";
@@ -58,9 +101,11 @@
               runHook postInstall
             '';
           };
-        in {
+        in
+        {
           default = firmware;
           firmware = firmware;
-        });
+        }
+      );
     };
 }
