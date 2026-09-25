@@ -1,13 +1,13 @@
 //! Framing and the small Pulse-Eight command subset used by Linux pulse8-cec.
 use crate::transport::{self, Event, Frame, MAX_FRAME};
-use binary_serde::{BinarySerde, Endianness};
 use heapless::Deque;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 const START: u8 = 0xff;
 const END: u8 = 0xfe;
 const ESCAPE: u8 = 0xfd;
 const EOM: u8 = 0x80;
-#[derive(Clone, Copy, BinarySerde)]
+#[derive(Clone, Copy, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
 enum Code {
     Ping = 0x01,
@@ -33,24 +33,6 @@ enum Code {
     Config22 = 0x22,
     Config24 = 0x24,
     Config26 = 0x26,
-}
-
-#[derive(BinarySerde)]
-struct Ack {
-    code: Code,
-    command: Code,
-}
-
-#[derive(BinarySerde)]
-struct ValueReply {
-    code: Code,
-    value: u16,
-}
-
-#[derive(BinarySerde)]
-struct ReceivedByte {
-    code: u8,
-    value: u8,
 }
 
 pub struct Protocol {
@@ -106,24 +88,22 @@ impl Protocol {
         let _ = self.output.push_back(END);
     }
 
-    fn send<T: BinarySerde>(&mut self, value: &T) {
-        let bytes = value.binary_serialize_to_array(Endianness::Big);
-        self.packet(bytes.as_ref());
-    }
-
     fn accepted(&mut self, command: Code) {
-        self.send(&Ack {
-            code: Code::Accepted,
-            command,
-        });
+        self.packet(&[Code::Accepted.into(), command.into()]);
     }
 
     fn rejected(&mut self) {
-        self.send(&Code::Rejected);
+        self.packet(&[Code::Rejected.into()]);
+    }
+
+    fn word_reply(&mut self, code: Code, value: u16) {
+        let [high, low] = value.to_be_bytes();
+        self.packet(&[code.into(), high, low]);
     }
 
     fn word(args: &[u8]) -> Option<u16> {
-        u16::binary_deserialize(args.get(..u16::SERIALIZED_SIZE)?, Endianness::Big).ok()
+        let bytes: [u8; 2] = args.get(..2)?.try_into().ok()?;
+        Some(u16::from_be_bytes(bytes))
     }
 
     pub fn input_byte(&mut self, byte: u8) {
@@ -166,8 +146,7 @@ impl Protocol {
         let Some((code, args)) = command.split_first() else {
             return;
         };
-        let Ok(code) = Code::binary_deserialize(core::slice::from_ref(code), Endianness::Big)
-        else {
+        let Ok(code) = Code::try_from(*code) else {
             self.rejected();
             return;
         };
@@ -217,16 +196,10 @@ impl Protocol {
                 self.accepted(code);
             }
             // Report version 1: Linux skips persistent EEPROM configuration.
-            Code::FirmwareVersion => self.send(&ValueReply {
-                code: Code::FirmwareVersion,
-                value: 1,
-            }),
+            Code::FirmwareVersion => self.word_reply(Code::FirmwareVersion, 1),
             Code::GetPhysicalAddress => {
                 let address = self.host_address.unwrap_or(self.sniffed_address);
-                self.send(&ValueReply {
-                    code: Code::GetPhysicalAddress,
-                    value: address,
-                });
+                self.word_reply(Code::GetPhysicalAddress, address);
             }
             _ => self.rejected(),
         }
@@ -242,15 +215,12 @@ impl Protocol {
                         Code::FrameData
                     };
                     let eom = if i + 1 == frame.len as usize { EOM } else { 0 };
-                    self.send(&ReceivedByte {
-                        code: (code as u8) | eom,
-                        value: frame.bytes[i],
-                    });
+                    self.packet(&[u8::from(code) | eom, frame.bytes[i]]);
                 }
             }
-            Event::Sent => self.send(&Code::Sent),
-            Event::Nack => self.send(&Code::Nack),
-            Event::LineError => self.send(&Code::LineError),
+            Event::Sent => self.packet(&[Code::Sent.into()]),
+            Event::Nack => self.packet(&[Code::Nack.into()]),
+            Event::LineError => self.packet(&[Code::LineError.into()]),
         }
     }
 }

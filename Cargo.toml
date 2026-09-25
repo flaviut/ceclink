@@ -13,11 +13,11 @@ name = "cec-4k"
 required-features = ["firmware"]
 
 [dependencies]
-binary_serde = { version = "1.0.25", default-features = false }
 cortex-m = "0.7.7"
 critical-section = "1.2.0"
 embedded-hal = "1.0.0"
 heapless = "0.8.0"
+num_enum = { version = "0.7.6", default-features = false }
 panic-halt = "0.2.0"
 rp235x-hal = { version = "0.4.0", features = ["rt", "critical-section-impl"] }
 usb-device = "0.3.2"
