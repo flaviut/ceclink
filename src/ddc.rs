@@ -195,6 +195,11 @@ pub fn init(sda: Sda, scl: Scl, pio0: PIO0, resets: &mut pac::RESETS) -> Ddc {
         "jmp x!=y, handle",
         "jmp changed",
         "handle:",
+        // Let the 100 kΩ tap settle before classifying an apparent SDA edge.
+        "nop [31]",
+        "nop [31]",
+        "nop [31]",
+        "nop [31]",
         "jmp pin sda_event",
         "in y, 1",
         "jmp bit",
