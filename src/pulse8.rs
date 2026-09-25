@@ -1,12 +1,57 @@
 //! Framing and the small Pulse-Eight command subset used by Linux pulse8-cec.
 use crate::transport::{self, Event, Frame, MAX_FRAME};
+use binary_serde::{BinarySerde, Endianness};
 use heapless::Deque;
 
 const START: u8 = 0xff;
 const END: u8 = 0xfe;
 const ESCAPE: u8 = 0xfd;
-const ACCEPTED: u8 = 0x08;
-const REJECTED: u8 = 0x09;
+const EOM: u8 = 0x80;
+#[derive(Clone, Copy, BinarySerde)]
+#[repr(u8)]
+enum Code {
+    Ping = 0x01,
+    FrameStart = 0x05,
+    FrameData = 0x06,
+    Accepted = 0x08,
+    Rejected = 0x09,
+    SetAckMask = 0x0a,
+    Transmit = 0x0b,
+    TransmitEom = 0x0c,
+    SetTransmitIdleTime = 0x0d,
+    SetTransmitAckPolarity = 0x0e,
+    Sent = 0x10,
+    LineError = 0x11,
+    Nack = 0x12,
+    FirmwareVersion = 0x15,
+    Config18 = 0x18,
+    Config1a = 0x1a,
+    Config1c = 0x1c,
+    Config1e = 0x1e,
+    GetPhysicalAddress = 0x1f,
+    SetPhysicalAddress = 0x20,
+    Config22 = 0x22,
+    Config24 = 0x24,
+    Config26 = 0x26,
+}
+
+#[derive(BinarySerde)]
+struct Ack {
+    code: Code,
+    command: Code,
+}
+
+#[derive(BinarySerde)]
+struct ValueReply {
+    code: Code,
+    value: u16,
+}
+
+#[derive(BinarySerde)]
+struct ReceivedByte {
+    code: u8,
+    value: u8,
+}
 
 pub struct Protocol {
     input: [u8; 32],
@@ -61,8 +106,24 @@ impl Protocol {
         let _ = self.output.push_back(END);
     }
 
-    fn accepted(&mut self, code: u8) {
-        self.packet(&[ACCEPTED, code]);
+    fn send<T: BinarySerde>(&mut self, value: &T) {
+        let bytes = value.binary_serialize_to_array(Endianness::Big);
+        self.packet(bytes.as_ref());
+    }
+
+    fn accepted(&mut self, command: Code) {
+        self.send(&Ack {
+            code: Code::Accepted,
+            command,
+        });
+    }
+
+    fn rejected(&mut self) {
+        self.send(&Code::Rejected);
+    }
+
+    fn word(args: &[u8]) -> Option<u16> {
+        u16::binary_deserialize(args.get(..u16::SERIALIZED_SIZE)?, Endianness::Big).ok()
     }
 
     pub fn input_byte(&mut self, byte: u8) {
@@ -102,45 +163,72 @@ impl Protocol {
     }
 
     fn command(&mut self, command: &[u8]) {
-        let Some((&code, args)) = command.split_first() else {
+        let Some((code, args)) = command.split_first() else {
+            return;
+        };
+        let Ok(code) = Code::binary_deserialize(core::slice::from_ref(code), Endianness::Big)
+        else {
+            self.rejected();
             return;
         };
         match code {
-            0x01 | 0x18 | 0x1a | 0x1c | 0x1e | 0x20 | 0x22 | 0x24 | 0x26 => {
-                if code == 0x20 && args.len() >= 2 {
-                    self.host_address = Some(u16::from_be_bytes([args[0], args[1]]));
+            Code::Ping
+            | Code::Config18
+            | Code::Config1a
+            | Code::Config1c
+            | Code::Config1e
+            | Code::SetPhysicalAddress
+            | Code::Config22
+            | Code::Config24
+            | Code::Config26 => {
+                if matches!(code, Code::SetPhysicalAddress) {
+                    if let Some(address) = Self::word(args) {
+                        self.host_address = Some(address);
+                    }
                 }
                 self.accepted(code);
             }
-            0x0a if args.len() >= 2 => {
-                transport::set_ack_mask(u16::from_be_bytes([args[0], args[1]]));
-                self.accepted(code);
+            Code::SetAckMask => {
+                if let Some(mask) = Self::word(args) {
+                    transport::set_ack_mask(mask);
+                    self.accepted(code);
+                    return;
+                }
+                self.rejected();
             }
-            0x0d | 0x0e if !args.is_empty() => self.accepted(code),
-            0x0b | 0x0c if !args.is_empty() => {
+            Code::SetTransmitIdleTime | Code::SetTransmitAckPolarity if !args.is_empty() => {
+                self.accepted(code)
+            }
+            Code::Transmit | Code::TransmitEom if !args.is_empty() => {
                 if self.transmit.len as usize >= MAX_FRAME {
                     self.transmit = Frame::default();
-                    self.packet(&[REJECTED]);
+                    self.rejected();
                     return;
                 }
                 self.transmit.bytes[self.transmit.len as usize] = args[0];
                 self.transmit.len += 1;
-                if code == 0x0c {
+                if matches!(code, Code::TransmitEom) {
                     let frame = core::mem::take(&mut self.transmit);
                     if !transport::submit(frame) {
-                        self.packet(&[REJECTED]);
+                        self.rejected();
                         return;
                     }
                 }
                 self.accepted(code);
             }
             // Report version 1: Linux skips persistent EEPROM configuration.
-            0x15 => self.packet(&[0x15, 0x00, 0x01]),
-            0x1f => {
+            Code::FirmwareVersion => self.send(&ValueReply {
+                code: Code::FirmwareVersion,
+                value: 1,
+            }),
+            Code::GetPhysicalAddress => {
                 let address = self.host_address.unwrap_or(self.sniffed_address);
-                self.packet(&[0x1f, (address >> 8) as u8, address as u8]);
+                self.send(&ValueReply {
+                    code: Code::GetPhysicalAddress,
+                    value: address,
+                });
             }
-            _ => self.packet(&[REJECTED]),
+            _ => self.rejected(),
         }
     }
 
@@ -148,14 +236,21 @@ impl Protocol {
         match event {
             Event::Received(frame) => {
                 for i in 0..frame.len as usize {
-                    let code = if i == 0 { 0x05 } else { 0x06 };
-                    let eom = if i + 1 == frame.len as usize { 0x80 } else { 0 };
-                    self.packet(&[code | eom, frame.bytes[i]]);
+                    let code = if i == 0 {
+                        Code::FrameStart
+                    } else {
+                        Code::FrameData
+                    };
+                    let eom = if i + 1 == frame.len as usize { EOM } else { 0 };
+                    self.send(&ReceivedByte {
+                        code: (code as u8) | eom,
+                        value: frame.bytes[i],
+                    });
                 }
             }
-            Event::Sent => self.packet(&[0x10]),
-            Event::Nack => self.packet(&[0x12]),
-            Event::LineError => self.packet(&[0x11]),
+            Event::Sent => self.send(&Code::Sent),
+            Event::Nack => self.send(&Code::Nack),
+            Event::LineError => self.send(&Code::LineError),
         }
     }
 }
