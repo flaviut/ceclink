@@ -47,46 +47,43 @@
         });
       };
 
-      nixosModules.default = { pkgs, config, ... }: {
-        nixpkgs.overlays = [ self.overlays.default ];
-        environment.systemPackages = [ pkgs.v4l-utils ];
-        services.fwupd.enable = true;
-        boot.kernelModules = [ "pulse8-cec" "i2c-dev" ];
-        boot.extraModulePackages = [
-          (pkgs.pulse8Cec config.boot.kernelPackages)
-        ];
+      nixosModules.default =
+        {
+          pkgs,
+          config,
+          lib,
+          ...
+        }:
+        {
+          nixpkgs.overlays = [ self.overlays.default ];
+          environment.systemPackages = [ pkgs.v4l-utils ];
+          services.fwupd.enable = true;
+          boot.kernelModules = [
+            "pulse8-cec"
+            "i2c-dev"
+          ];
+          boot.extraModulePackages = [
+            (pkgs.pulse8Cec config.boot.kernelPackages)
+          ];
 
-        services.udev.extraRules = ''
-          SUBSYSTEM=="tty", KERNEL=="ttyACM[0-9]*", ATTRS{idVendor}=="2548", ATTRS{idProduct}=="1001", ACTION=="add", TAG+="systemd", ENV{SYSTEMD_WANTS}+="pulse8-cec-inputattach@%k.service"
-          SUBSYSTEM=="tty", KERNEL=="ttyACM[0-9]*", ENV{ID_VENDOR_ID}=="2548", ENV{ID_MODEL_ID}=="1002", ENV{ID_USB_INTERFACE_NUM}=="00", ACTION=="add", TAG+="systemd", ENV{SYSTEMD_WANTS}+="pulse8-cec-inputattach@%k.service"
-          SUBSYSTEM=="tty", KERNEL=="ttyACM[0-9]*", ENV{ID_VENDOR_ID}=="2548", ENV{ID_MODEL_ID}=="1002", ENV{ID_USB_INTERFACE_NUM}=="02", ACTION=="add", SYMLINK+="ceclink-status", GROUP="video", MODE="0660", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ceclink-physical-address@%k.service"
-        '';
-        systemd.services."pulse8-cec-inputattach@" = {
-          description = "Attach Pulse-Eight CEC adapter on %I";
-          bindsTo = [ "dev-%i.device" ];
-          after = [ "dev-%i.device" ];
-          serviceConfig = {
-            Type = "simple";
-            ExecStart = "${pkgs.linuxConsoleTools}/bin/inputattach --pulse8-cec /dev/%I";
-            Restart = "on-failure";
-            RestartSec = 1;
-          };
+          services.udev.extraRules = builtins.readFile ./linux/99-ceclink.rules;
+          systemd.units."pulse8-cec-inputattach@.service".text =
+            lib.replaceStrings
+              [ "ExecStart=inputattach" ]
+              [ "ExecStart=${pkgs.linuxConsoleTools}/bin/inputattach" ]
+              (builtins.readFile (./linux + "/pulse8-cec-inputattach@.service"));
+          systemd.units."ceclink-physical-address@.service".text =
+            lib.replaceStrings
+              [ "/usr/bin/python3" "/opt/ceclink/physical-address.py" ]
+              [
+                "${pkgs.python3.withPackages (ps: [ ps.pyserial ])}/bin/python"
+                "${./nix/physical-address.py}"
+              ]
+              (builtins.readFile (./linux + "/ceclink-physical-address@.service"))
+            + ''
+              Environment="PATH=${lib.makeBinPath [ pkgs.ddcutil ]}"
+            '';
         };
-        systemd.services."ceclink-physical-address@" = {
-          description = "Apply CECLink physical address from %I";
-          bindsTo = [ "dev-%i.device" ];
-          after = [ "dev-%i.device" ];
-          path = [ pkgs.ddcutil ];
-          serviceConfig = {
-            Type = "simple";
-            ExecStart = "${
-              pkgs.python3.withPackages (ps: [ ps.pyserial ])
-            }/bin/python ${./nix/physical-address.py} %I";
-            Restart = "on-failure";
-            RestartSec = 2;
-          };
-        };
-      };
 
       formatter = forSystems (
         pkgs:

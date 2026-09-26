@@ -1,0 +1,9 @@
+[Unit]
+Description=Attach CECLink CEC interface on %I
+BindsTo=dev-%i.device
+After=dev-%i.device
+
+[Service]
+ExecStart=inputattach --pulse8-cec /dev/%I
+Restart=on-failure
+RestartSec=1

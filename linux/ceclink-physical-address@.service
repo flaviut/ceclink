@@ -1,0 +1,9 @@
+[Unit]
+Description=Apply CECLink physical address from %I
+BindsTo=dev-%i.device
+After=dev-%i.device
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/ceclink/physical-address.py %I
+Restart=on-failure
+RestartSec=2

@@ -1,0 +1,2 @@
+SUBSYSTEM=="tty", KERNEL=="ttyACM[0-9]*", ENV{ID_VENDOR_ID}=="2548", ENV{ID_MODEL_ID}=="1002", ENV{ID_USB_INTERFACE_NUM}=="00", ACTION=="add", TAG+="systemd", ENV{SYSTEMD_WANTS}+="pulse8-cec-inputattach@%k.service"
+SUBSYSTEM=="tty", KERNEL=="ttyACM[0-9]*", ENV{ID_VENDOR_ID}=="2548", ENV{ID_MODEL_ID}=="1002", ENV{ID_USB_INTERFACE_NUM}=="02", ACTION=="add", SYMLINK+="ceclink-status", GROUP="video", MODE="0660", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ceclink-physical-address@%k.service"

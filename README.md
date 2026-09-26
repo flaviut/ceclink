@@ -55,14 +55,88 @@ Download `firmware.uf2` from the
 
 Hold the BOOT button while connecting the USB cable. Once powered, you should see a new drive on your computer. Copy-paste the `.uf2` file over, and your device should be flashed.
 
-### Operating system integration
-
-This project tries to make use of the operating system drivers for the bulk of the integration, but this is unfortunately not fully sufficient.
-
 #### CLI alternative
 
 ```sh
 picotool load -v -x ceclink.uf2
+```
+
+### Operating system integration
+
+This project tries to make use of the operating system drivers for the bulk of the integration, but this is unfortunately not fully sufficient. On Linux, `inputattach` connects the CEC serial interface to the Pulse-Eight kernel driver. A separate helper reads the HDMI physical address from the status interface and applies it to the kernel's CEC device.
+
+#### Generic Linux installation
+
+These instructions use systemd and udev to start the adapter automatically when it is plugged in, including after reboot.
+
+Install the dependencies for your distribution:
+
+| Distribution family | Install command |
+| --- | --- |
+| Debian / Ubuntu | `sudo apt install curl inputattach python3-serial ddcutil v4l-utils` |
+| Fedora | `sudo dnf install curl linuxconsoletools python3-pyserial ddcutil v4l-utils` |
+| Arch Linux | `sudo pacman -S curl linuxconsole python-pyserial ddcutil v4l-utils` |
+
+Download the physical-address helper into `/opt/ceclink` and configure the kernel modules to load at boot:
+
+```sh
+sudo install -d -m755 /opt/ceclink
+sudo curl --fail --location https://raw.githubusercontent.com/flaviut/ceclink/HEAD/nix/physical-address.py -o /opt/ceclink/physical-address.py
+sudo curl --fail --location https://raw.githubusercontent.com/flaviut/ceclink/HEAD/linux/ceclink.conf -o /etc/modules-load.d/ceclink.conf
+sudo modprobe pulse8-cec
+sudo modprobe i2c-dev
+```
+
+If `modprobe pulse8-cec` reports that the module is missing, your kernel needs the Pulse-Eight CEC driver (`CONFIG_USB_PULSE8_CEC`). Install your distribution's additional kernel modules package or use a kernel that includes this driver before continuing.
+
+Install the two systemd service templates. The first attaches the CEC control port to the kernel driver; the second keeps the kernel's HDMI physical address synchronized with the adapter:
+
+```sh
+sudo curl --fail --location https://raw.githubusercontent.com/flaviut/ceclink/HEAD/linux/pulse8-cec-inputattach@.service -o /etc/systemd/system/pulse8-cec-inputattach@.service
+
+sudo curl --fail --location https://raw.githubusercontent.com/flaviut/ceclink/HEAD/linux/ceclink-physical-address@.service -o /etc/systemd/system/ceclink-physical-address@.service
+```
+
+Install the udev rules that start these services for the correct USB interfaces. Interface `00` carries CEC commands; interface `02` carries physical-address status:
+
+```sh
+sudo curl --fail --location https://raw.githubusercontent.com/flaviut/ceclink/HEAD/linux/99-ceclink.rules -o /etc/udev/rules.d/99-ceclink.rules
+sudo systemctl daemon-reload
+sudo udevadm control --reload-rules
+```
+
+Connect the adapter in the HDMI path, then unplug and reconnect its USB cable. udev starts both services automatically; no `systemctl enable` is needed. Check that they are running and that the CEC device has a physical address:
+
+```sh
+systemctl status 'pulse8-cec-inputattach@*' 'ceclink-physical-address@*'
+sudo cec-ctl -d /dev/cec0
+```
+
+If you have multiple CEC devices, substitute the adapter's `/dev/cecN` path. To inspect service logs:
+
+```sh
+journalctl -b -u 'pulse8-cec-inputattach@*' -u 'ceclink-physical-address@*'
+```
+
+#### NixOS integration
+
+Things are much easier on NixOS. Add this repository to your system flake's inputs:
+
+```nix
+inputs.ceclink.url = "github:flaviut/ceclink";
+```
+
+Include `ceclink` in your flake's `outputs` arguments and add its module to the host's existing `nixosSystem` module list:
+
+```nix
+outputs = { nixpkgs, ceclink, ... }: {
+  nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+    modules = [
+      ./configuration.nix
+      ceclink.nixosModules.default
+    ];
+  };
+};
 ```
 
 ## Development
@@ -85,42 +159,6 @@ ls result/ceclink.{uf2,elf}
 ```
 
 Format the Nix and Rust sources with `nix fmt`.
-
-## NixOS integration
-
-Add this repository as a flake input and import `inputs.ceclink.nixosModules.default` on the host. The module loads the Pulse-Eight kernel driver, starts `inputattach` only for the CEC USB interface, creates `/dev/ceclink-status` for the status interface, and enables fwupd support.
-
-The `ceclink-physical-address@` service reads the status interface and applies its DDC physical address to the matching `/dev/cec*` through the standard Linux CEC ioctl. It matches the devices by their shared USB parent, including when more than one adapter is connected. It retries when the CEC driver is still attaching and rechecks the kernel's address on every record. If firmware reports `65535` (unknown) for 2 seconds, the helper uses `ddcutil detect` to force a 256-byte EDID read across display buses, up to three attempts, while the firmware is listening. The firmware status confirms whether a read found the address. Known addresses must stay stable for 0.5 seconds; a short unknown interval during an EDID reread does not start another scan or clear a valid address. The NixOS module loads `i2c-dev` and supplies `ddcutil`. On other Linux distributions, install `pyserial` and `ddcutil`, load `i2c-dev`, and run `python3 nix/physical-address.py ttyACM1`, substituting the status TTY. The service needs access to the status TTY, the CEC device, and the HDMI I²C buses.
-
-## fwupd on NixOS
-
-The firmware exposes Raspberry Pi's USB reset interface alongside CDC ACM. fwupd's existing `rp-pico` plugin uses that interface to enter RP2350 BOOTSEL, then its `uf2` plugin writes the UF2 image. The overlay adds device matching for this adapter and the RP2350 ROM's `2e8a:000f` USB identity.
-
-Rebuild the NixOS configuration, then flash a firmware containing the USB reset interface once using the manual method above. `fwupdmgr get-devices` should then show the adapter as updatable. A signed or local fwupd CAB containing the UF2 and release metadata is still required for `fwupdmgr update` to offer an update.
-
-The runtime quirk selects fwupd's `rp-pico` plugin by VID:PID; that plugin also checks for the USB reset interface, which ordinary Pulse-Eight adapters lack. Increment the firmware's USB `device_release` for future firmware versions so fwupd can report the installed version. The RP2350 ROM BOOTSEL button remains a recovery path.
-
-## Physical address status and DDC diagnostics
-
-The second USB CDC ACM port is labeled `CECLink status`. On Linux, the persistent `/dev/serial/by-id/usb-CECLink_RP2350_HDMI_CEC_Adapter_<chip-id>-if00` link identifies the CEC port; `-if02` identifies status. While DTR is asserted, status sends a record immediately, when the address changes, and once per second. The stable format is exactly two tab-separated decimal fields; `65535` means unknown:
-
-```text
-status_version=1\tphysical_address=4096
-```
-
-The separator on the wire is a tab. For a verbose snapshot, send `diagnostics\n` to the status port. It returns one record with `version=1`, GPIO levels, PIO traces, counters, and the current address. This diagnostic record is separate from the supported status format. For example:
-
-```text
-version=1\tuptime_ms=1234\tsda=1\tscl=1\tring_used=0\tring_peak=4\tstarts=2\tstops=2\twords=12\tfifo_stalls=0\tring_overflows=0\ttrace_len=2\ttrace_0=0\ttrace_1=0\tedid_write_addresses=1\tedid_read_addresses=1\tedid_bytes=8\tinvalid_words=0\tunacknowledged_addresses=0\tpio_pc=7\trx_empty=1\trx_full=0\tphysical_address=4096
-```
-
-Stop `ceclink-physical-address@<status-tty>.service` before opening the status port directly. The CEC control port remains available to `inputattach` while the helper uses status.
-
-For a future driver, the CEC control port also supports the CECLink `GET_SNIFFED_PHYSICAL_ADDRESS` command (`0x30`). Send the normal Pulse-Eight frame `ff 30 fe`; the response is `ff 30 <address-high> <address-low> fe`, using the normal escape rules for bytes `fd` through `ff`. This returns the raw DDC address, including `ffff` when unknown, regardless of any host-set physical address. The stock driver does not send this command.
-
-The onboard RGB LED uses GPIO22 for data and GPIO23 for power. Blue means the firmware is running but has not captured a DDC START. Amber means DDC traffic was captured but no physical address was found. Red means a FIFO stall or SRAM ring overflow occurred. Green means the physical address was found. The serial diagnostics give the exact counters and GPIO levels.
-
-For an active EDID read from the HDMI connector, use `nix run nixpkgs#ddcutil -- --edid-read-size=256 --disable-try-get-edid-from-sysfs detect` while the adapter is in the HDMI path. Compare counter values before and after the read.
 
 ## Connections
 
