@@ -11,7 +11,7 @@ test -s "$firmware_out/ceclink.uf2"
 cp "$firmware_out/ceclink.uf2" "$output_dir/firmware.uf2"
 
 python3 jlcpcb_fab.py pcb/xiao-rp2350-adaptor
-python3 jlcpcb_fab.py pcb/hdmi-breakout
+python3 jlcpcb_fab.py --assembly pcb/hdmi-breakout
 
 test -s pcb/xiao-rp2350-adaptor/fab/xiao-rp2350-adaptor_jlcpcb.zip
 test -s pcb/hdmi-breakout/fab/hdmi-breakout_jlcpcb.zip
