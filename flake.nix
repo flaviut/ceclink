@@ -123,6 +123,12 @@
               echo 'Build: cargo build --profile release-with-debug'
             '';
           };
+          release = pkgs.mkShell {
+            packages = [
+              pkgs.kicad
+              pkgs.python3
+            ];
+          };
         }
       );
 

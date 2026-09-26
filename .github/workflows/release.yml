@@ -1,0 +1,27 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '**'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Build release artifacts
+        run: nix develop .#release --command bash .github/scripts/release-artifacts.sh
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/adapter.zip
+            dist/hdmi-breakout.zip
+            dist/firmware.uf2

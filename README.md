@@ -29,9 +29,12 @@ need to have *both* these boards produced:
   that connects to the HDMI breakout. This is an ordinary **2-layer** board with
   no controlled-impedance requirement, so any standard stackup is fine.
 
-Shared symbols and footprints live in [`pcb/library`](pcb/library). Fabrication
-outputs (gerbers, BOM, CPL) for each board can be generated with
+Shared symbols and footprints live in [`pcb/library`](pcb/library). Gerber and
+drill archives for each board can be generated with
 [`jlcpcb_fab.py`](jlcpcb_fab.py).
+The [latest release](https://github.com/flaviut/ceclink/releases/latest) has
+ready-to-order Gerber and drill archives: `adapter.zip` for the RP2040 adapter
+and `hdmi-breakout.zip` for the HDMI board.
 
 Additional BOM (parts to source separately on top of the fabricated boards):
 
@@ -48,7 +51,8 @@ Remember that you can easily cut a longer 2.54mm header to size with some snips.
 
 ### Initial flash
 
-Download the most recent release's `.uf2` file from the github sidebar.
+Download `firmware.uf2` from the
+[latest release](https://github.com/flaviut/ceclink/releases/latest).
 
 Hold the BOOT button while connecting the USB cable. Once powered, you should see a new drive on your computer. Copy-paste the `.uf2` file over, and your device should be flashed.
 
