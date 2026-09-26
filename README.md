@@ -44,6 +44,7 @@ Additional BOM (parts to source separately on top of the fabricated boards):
 | Count | Part |
 | ----- | ---- |
 | 2 | HDMI Type-A receptacle (Molex 208658-1001, LCSC C138388) |
+| 2 | 0603 100kΩ resistor |
 | 1 | XIAO RP2350 |
 | 2 | 1×9 2.54mm male pin header strip |
 | 2 | 1×9 2.54mm female header / socket strip |
