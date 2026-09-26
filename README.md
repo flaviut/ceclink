@@ -2,6 +2,10 @@
 
 The CECLink is a small device that can be used to allow a Linux computer to control a TV using the CEC protocol over HDMI. This is particularly helpful for HTPCs, which often do not have the required hardware to do so built-in.
 
+![photo of the device](./docs/module.jpg)
+
+## Why?
+
 What's unique about this device is that it supports higher HDMI bandwidths. It is designed to work with and tested on a 4k, 10-bit HDR, 60FPS signal. This is done through following best practices for high-speed data lines.
 
 While others devices look like this, and are made on a standard PCB (thanks [karl for the photo](https://karlquinsland.com/pulse-eight-hdmi-cec-injector-teardown/)):
