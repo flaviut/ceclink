@@ -8,11 +8,11 @@ While others devices look like this, and are made on a standard PCB (thanks [kar
 
 ![Wires passing straight through a HDMI connector](./docs/straight-through.jpeg)
 
-This project's design, which looks a lot more random, is made on a controlled-impedance PCB and contains the secrets of the RF signal dark arts:
+This project's design looks a little different, as it follows best practices in the dark arts of RF design:
 
 ![matched pairs for video lines](./docs/matched-pairs.jpeg)
 
-To be clear, this is not a secret technique! I would love to see others use this technique, and offer an updated commercial version of this device! All the details on how it works are in this source repo under `pcbs/`, and I would be happy to talk about it.
+To be clear, this is not a secret technique! I would love to see others use this technique, and offer an updated commercial version of this device! All the details on how it works are in this source repo under `pcb/`, and I would be happy to talk about it.
 
 ## Making your own
 
@@ -21,27 +21,26 @@ To be clear, this is not a secret technique! I would love to see others use this
 The hardware is split across two KiCad projects under [`pcb/`](pcb). You will
 need to have *both* these boards produced:
 
-* [`pcb/hdmi-breakout`](pcb/hdmi-breakout) — the HDMI passthrough breakout that
-  carries the CEC and DDC signals. This is a 4-layer board; order it with the
-  **JLC04161H-7628 stackup**. Stackup is not a minor detail; incorrect stackup
-  will destroy performance.
-* [`pcb/rp2040-adaptor`](pcb/rp2040-adaptor) — a simple breakout for the RP2040-Zero
-  that connects to the HDMI breakout. This is an ordinary **2-layer** board with
+* [`pcb/hdmi-breakout`](pcb/hdmi-breakout) — the HDMI passthrough that breaks
+  out the CEC and DDC signals. It is a 4-layer board; order it with the
+  **JLC04161H-7628 stackup**. The precise stackup is *crucial* for it to work.
+* [`pcb/xiao-rp2350-adaptor`](pcb/xiao-rp2350-adaptor) — a simple breakout for the XIAO RP2350
+  that connects to the HDMI breakout. This is an ordinary 2-layer board with
   no controlled-impedance requirement, so any standard stackup is fine.
 
-Shared symbols and footprints live in [`pcb/library`](pcb/library). Gerber and
-drill archives for each board can be generated with
-[`jlcpcb_fab.py`](jlcpcb_fab.py).
 The [latest release](https://github.com/flaviut/ceclink/releases/latest) has
-ready-to-order Gerber and drill archives: `adapter.zip` for the RP2040 adapter
+ready-to-order Gerber and drill archives: `adapter.zip` for the XIAO RP2350 adapter
 and `hdmi-breakout.zip` for the HDMI board.
+
+Gerber and drill archives for each board can be generated with
+[`jlcpcb_fab.py`](jlcpcb_fab.py).
 
 Additional BOM (parts to source separately on top of the fabricated boards):
 
 | Count | Part |
 | ----- | ---- |
 | 2 | HDMI Type-A receptacle (Molex 208658-1001, LCSC C138388) |
-| 1 | Waveshare RP2040-Zero |
+| 1 | XIAO RP2350 |
 | 2 | 1×9 2.54mm male pin header strip |
 | 2 | 1×9 2.54mm female header / socket strip |
 | 2 | M3 × 16mm socket head cap screw |

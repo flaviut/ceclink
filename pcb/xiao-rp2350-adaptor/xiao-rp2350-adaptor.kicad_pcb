@@ -187,7 +187,7 @@
 		)
 		(path "/ffeb990e-7530-4af0-854e-50e67adef33e")
 		(sheetname "/")
-		(sheetfile "rp2040-adaptor.kicad_sch")
+		(sheetfile "xiao-rp2350-adaptor.kicad_sch")
 		(units
 			(unit
 				(name "A")
@@ -838,7 +838,7 @@
 		(property ki_fp_filters "Connector*:*_1x??_*")
 		(path "/9a4706fe-f98a-4407-940c-df53114ee927")
 		(sheetname "/")
-		(sheetfile "rp2040-adaptor.kicad_sch")
+		(sheetfile "xiao-rp2350-adaptor.kicad_sch")
 		(units
 			(unit
 				(name "A")
@@ -1191,7 +1191,7 @@
 		(property ki_fp_filters "Connector*:*_1x??_*")
 		(path "/9fcdad9b-c324-4e51-9fcb-c1a64b64f444")
 		(sheetname "/")
-		(sheetfile "rp2040-adaptor.kicad_sch")
+		(sheetfile "xiao-rp2350-adaptor.kicad_sch")
 		(units
 			(unit
 				(name "A")

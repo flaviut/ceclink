@@ -502,7 +502,7 @@
     "pinned_symbol_libs": []
   },
   "meta": {
-    "filename": "rp2040-adaptor.kicad_pro",
+    "filename": "xiao-rp2350-adaptor.kicad_pro",
     "version": 3
   },
   "net_settings": {
@@ -657,7 +657,7 @@
     "subpart_id_separator": 0,
     "top_level_sheets": [
       {
-        "filename": "rp2040-adaptor.kicad_sch",
+        "filename": "xiao-rp2350-adaptor.kicad_sch",
         "name": "Root",
         "uuid": "d607bc5b-5721-4ed6-af77-912d348339a4"
       }

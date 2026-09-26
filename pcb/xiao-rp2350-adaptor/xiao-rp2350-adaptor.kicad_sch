@@ -1411,7 +1411,7 @@
 			(uuid "bf47d090-6936-47a0-82eb-500a41c8999e")
 		)
 		(instances
-			(project "rp2040-adaptor"
+			(project "xiao-rp2350-adaptor"
 				(path "/d607bc5b-5721-4ed6-af77-912d348339a4"
 					(reference "#PWR03")
 					(unit 1)
@@ -1512,7 +1512,7 @@
 			(uuid "80217697-6a39-4be0-8463-1d78413d0d31")
 		)
 		(instances
-			(project "rp2040-adaptor"
+			(project "xiao-rp2350-adaptor"
 				(path "/d607bc5b-5721-4ed6-af77-912d348339a4"
 					(reference "J2")
 					(unit 1)
@@ -1590,7 +1590,7 @@
 			(uuid "b3f9e0d3-4aa2-4ea9-bc4a-07f7923f0898")
 		)
 		(instances
-			(project "rp2040-adaptor"
+			(project "xiao-rp2350-adaptor"
 				(path "/d607bc5b-5721-4ed6-af77-912d348339a4"
 					(reference "#PWR02")
 					(unit 1)
@@ -1691,7 +1691,7 @@
 			(uuid "41d7d0bb-3ecd-45dc-a74e-5cb4ec9ac7a6")
 		)
 		(instances
-			(project "rp2040-adaptor"
+			(project "xiao-rp2350-adaptor"
 				(path "/d607bc5b-5721-4ed6-af77-912d348339a4"
 					(reference "J1")
 					(unit 1)
@@ -1839,7 +1839,7 @@
 			(uuid "7cb57b5c-bd2f-4ca9-a19b-931ee402c129")
 		)
 		(instances
-			(project "rp2040-adaptor"
+			(project "xiao-rp2350-adaptor"
 				(path "/d607bc5b-5721-4ed6-af77-912d348339a4"
 					(reference "RZ1")
 					(unit 1)
